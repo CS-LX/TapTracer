@@ -14,6 +14,14 @@ function Metal.new(albedo, fuzz)
     }, Metal)
 end
 
+function Metal:emitted(_)
+    return Vec3.new(0, 0, 0)
+end
+
+function Metal:albedoAt(_)
+    return self.albedo
+end
+
 function Metal:scatter(ray, record, rng)
     local reflected = ray.direction:unit():reflect(record.normal)
     reflected = reflected + Vec3.randomUnitVector(rng) * self.fuzz
@@ -23,7 +31,7 @@ function Metal:scatter(ray, record, rng)
     if directionDotNormal <= 0 then
         return nil, nil
     end
-    return Ray.new(record.point, reflected), self.albedo
+    return Ray.new(record.point, reflected), self.albedo, true
 end
 
 return Metal

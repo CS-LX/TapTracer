@@ -17,6 +17,10 @@ function Dielectric.new(refractionIndex)
     return setmetatable({ refractionIndex = refractionIndex }, Dielectric)
 end
 
+function Dielectric:emitted(_)
+    return Vec3.new(0, 0, 0)
+end
+
 function Dielectric:scatter(ray, record, rng)
     local attenuation = Vec3.new(1, 1, 1)
     local ratio = record.frontFace and (1 / self.refractionIndex) or self.refractionIndex
@@ -35,7 +39,7 @@ function Dielectric:scatter(ray, record, rng)
         direction = unitDirection:refract(record.normal, ratio)
     end
 
-    return Ray.new(record.point, direction), attenuation
+    return Ray.new(record.point, direction), attenuation, true
 end
 
 return Dielectric

@@ -1,5 +1,6 @@
 local Vec3 = require "RayTracer.Math.Vec3"
 local Ray = require "RayTracer.Math.Ray"
+local SolidColor = require "RayTracer.Texture.SolidColor"
 
 ---@class LambertianVec3
 ---@field x number
@@ -12,7 +13,19 @@ local Lambertian = {}
 Lambertian.__index = Lambertian
 
 function Lambertian.new(albedo)
-    return setmetatable({ albedo = albedo }, Lambertian)
+    local texture = albedo
+    if texture == nil or type(texture.value) ~= "function" then
+        texture = SolidColor.new(albedo)
+    end
+    return setmetatable({ albedo = albedo, texture = texture }, Lambertian)
+end
+
+function Lambertian:emitted(_)
+    return Vec3.new(0, 0, 0)
+end
+
+function Lambertian:albedoAt(record)
+    return self.texture:value(record)
 end
 
 function Lambertian:scatter(ray, record, rng)
@@ -32,8 +45,8 @@ function Lambertian:scatter(ray, record, rng)
         direction = normal
     end
     local material = self
-    local albedo = rawget(material, "albedo")
-    return Ray.new(record.point, direction), albedo
+    local albedo = material:albedoAt(record)
+    return Ray.new(record.point, direction), albedo, false
 end
 
 return Lambertian

@@ -328,6 +328,43 @@ local function testAcceleration()
     assert(stats.primitiveTests < #scene.objects, "BVH should reduce primitive tests")
 end
 
+local function testLightingAndTextures()
+    local red = RT.SolidColor.new(Vec3.new(0.8, 0.1, 0.05))
+    local blue = RT.SolidColor.new(Vec3.new(0.05, 0.1, 0.8))
+    local checker = RT.Checker.new(1.0, red, blue)
+    local evenRecord = { point = Vec3.new(0.1, 0.1, 0.1) }
+    local oddRecord = { point = Vec3.new(1.1, 0.1, 0.1) }
+    assertVectorNear(checker:value(evenRecord), Vec3.new(0.8, 0.1, 0.05), 1e-8, "checker even")
+    assertVectorNear(checker:value(oddRecord), Vec3.new(0.05, 0.1, 0.8), 1e-8, "checker odd")
+
+    local light = RT.DiffuseLight.new(red, 3.0)
+    local lightRecord = { point = Vec3.new(0, 0, 0), frontFace = true }
+    assertVectorNear(light:emitted(lightRecord), Vec3.new(2.4, 0.3, 0.15), 1e-8, "emitted color")
+    lightRecord.frontFace = false
+    assertVectorNear(light:emitted(lightRecord), Vec3.new(0, 0, 0), 1e-8, "back face emission")
+
+    local lightSphere = RT.Sphere.new(Vec3.new(0, 2, 0), 1, light)
+    local point, normal, pdf = lightSphere:sampleSurface(RT.RNG.new(7))
+    assertNear((point - lightSphere.center):length(), 1, 1e-8, "sampled light surface")
+    assertNear(normal:length(), 1, 1e-8, "sampled light normal")
+    assertNear(pdf, 1 / (4 * math.pi), 1e-8, "sphere area pdf")
+
+    local litScene = RT.Scene.new()
+    litScene:add(RT.Sphere.new(Vec3.new(0, 0, -1), 0.5, RT.Lambertian.new(red)))
+    litScene:add(RT.Sphere.new(Vec3.new(0, 2, -1), 0.5, light))
+    assertNear(#litScene.lights, 1, 0, "scene light registry")
+    local integrator = RT.PathIntegrator.new {
+        maxDepth = 4,
+        background = Vec3.new(0, 0, 0),
+    }
+    local color = integrator:trace(
+        Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1)),
+        litScene,
+        RT.RNG.new(11)
+    )
+    assert(color.x >= 0 and color.y >= 0 and color.z >= 0, "direct lighting color")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -355,6 +392,7 @@ testDeterministicRng()
 testMaterials()
 testPathIntegrator()
 testAcceleration()
+testLightingAndTextures()
 testPhaseCRenderer()
 testPresenters()
 testOutput()

@@ -33,6 +33,22 @@ function Triangle.new(first, second, third, material)
     }, Triangle)
 end
 
+function Triangle:sampleSurface(rng)
+    local u = math.sqrt(rng:nextFloat())
+    local v = rng:nextFloat()
+    local firstWeight = 1 - u
+    local secondWeight = u * (1 - v)
+    local thirdWeight = u * v
+    local point = self.first * firstWeight
+        + self.second * secondWeight
+        + self.third * thirdWeight
+    return point, self.normal, 1 / self:area()
+end
+
+function Triangle:area()
+    return 0.5 * self.edge1:cross(self.edge2):length()
+end
+
 function Triangle:boundingBox()
     return self.box
 end

@@ -4,16 +4,20 @@ local Scene = {}
 Scene.__index = Scene
 
 function Scene.new()
-    return setmetatable({ objects = {} }, Scene)
+    return setmetatable({ objects = {}, lights = {} }, Scene)
 end
 
 function Scene:add(object)
     self.objects[#self.objects + 1] = object
+    if object.material and object.material.isLight and object.sampleSurface then
+        self.lights[#self.lights + 1] = object
+    end
     return object
 end
 
 function Scene:clear()
     self.objects = {}
+    self.lights = {}
 end
 
 function Scene:hit(ray, rayInterval)

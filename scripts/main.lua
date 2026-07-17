@@ -32,15 +32,25 @@ local reportedComplete_ = false
 local function buildScene()
     local Vec3 = RayTracer.Vec3
     local red = RayTracer.Lambertian.new(Vec3.new(0.75, 0.18, 0.15))
-    local blue = RayTracer.Lambertian.new(Vec3.new(0.12, 0.32, 0.78))
+    local checker = RayTracer.Checker.new(
+        0.55,
+        RayTracer.SolidColor.new(Vec3.new(0.08, 0.18, 0.55)),
+        RayTracer.SolidColor.new(Vec3.new(0.16, 0.42, 0.82))
+    )
+    local blue = RayTracer.Lambertian.new(checker)
     local metal = RayTracer.Metal.new(Vec3.new(0.82, 0.84, 0.88), 0.12)
     local glass = RayTracer.Dielectric.new(1.5)
+    local light = RayTracer.DiffuseLight.new(
+        RayTracer.SolidColor.new(Vec3.new(1.0, 0.72, 0.42)),
+        5.0
+    )
 
     scene_ = RayTracer.Scene.new()
     scene_:add(RayTracer.Sphere.new(Vec3.new(0, 0, -1.1), 0.5, red))
     scene_:add(RayTracer.Sphere.new(Vec3.new(-1.05, 0, -1.4), 0.5, glass))
     scene_:add(RayTracer.Sphere.new(Vec3.new(1.05, 0, -1.25), 0.5, metal))
     scene_:add(RayTracer.Sphere.new(Vec3.new(0, -100.5, -1), 100, blue))
+    scene_:add(RayTracer.Sphere.new(Vec3.new(0, 2.8, -1), 0.65, light))
 
     camera_ = RayTracer.Camera.new {
         aspectRatio = CONFIG.width / CONFIG.height,

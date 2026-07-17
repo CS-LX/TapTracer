@@ -50,6 +50,13 @@ function Sphere:hit(ray, rayInterval)
     return record
 end
 
+function Sphere:sampleSurface(rng)
+    local direction = Vec3.randomUnitVector(rng)
+    local point = self.center + direction * self.radius
+    local normal = direction
+    return point, normal, 1 / (4 * math.pi * self.radius * self.radius)
+end
+
 function Sphere:boundingBox()
     local radius = self.radius
     local delta = Vec3.new(radius, radius, radius)
