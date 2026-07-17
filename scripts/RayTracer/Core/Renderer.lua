@@ -13,13 +13,27 @@
 ---@field nextTile number
 ---@field totalTiles number
 ---@field completedTiles number
+---@field completedPasses number
+---@field currentPass number
+---@field completedPassPixels number
+---@field completedSamplePixels number
+---@field totalSamplePixels number
 ---@field seed number
 ---@field presenter table|nil
+---@field timeProvider function|nil
+---@field renderStartTime number
+---@field renderEndTime number
+---@field elapsedSeconds number
+---@field lastStepSeconds number
+---@field pixelsPerSecond number
+---@field samplesPerSecond number
+---@field pathsPerSecond number
 ---@field nextPixel number
 ---@field totalPixels number
 ---@field completedPixels number
 ---@field totalSamples number
 ---@field totalRays number
+---@field lastTile table|nil
 ---@field complete boolean
 ---@field cancelled boolean
 ---@field started boolean
@@ -40,6 +54,28 @@ local function deriveSampleSeed(baseSeed, pixelIndex, sampleIndex)
     return (value ~ (value >> 16)) & 0xFFFFFFFF
 end
 
+local function updatePerformanceStats(renderer, computeSeconds, endTime)
+    renderer.lastStepSeconds = math.max(0, computeSeconds)
+    renderer.elapsedSeconds = renderer.elapsedSeconds + renderer.lastStepSeconds
+
+    if renderer.complete and renderer.renderEndTime == 0 then
+        renderer.renderEndTime = endTime
+    end
+
+    if renderer.elapsedSeconds > 0 then
+        renderer.pixelsPerSecond = renderer.completedSamplePixels / renderer.elapsedSeconds
+        renderer.samplesPerSecond = renderer.totalSamples / renderer.elapsedSeconds
+        local pathCount = renderer.totalSamples
+        if renderer.integrator.getStats then
+            local integratorStats = renderer.integrator:getStats()
+            if integratorStats and integratorStats.pathCount then
+                pathCount = integratorStats.pathCount
+            end
+        end
+        renderer.pathsPerSecond = pathCount / renderer.elapsedSeconds
+    end
+end
+
 function Renderer.new(options)
     options = options or {}
     assert(options.camera ~= nil, "Renderer requires a camera")
@@ -48,11 +84,14 @@ function Renderer.new(options)
 
     local width = options.width or options.camera.imageWidth
     local height = options.height or options.camera.imageHeight
-    local samplesPerPixel = options.samplesPerPixel or 1
+    local samplesPerPixel = math.max(1, math.floor(options.samplesPerPixel or 1))
     local tileSize = options.tileSize or 8
     local tileWidth = options.tileWidth or tileSize
     local tileHeight = options.tileHeight or tileSize
     local presenter = options.presenter
+    local timeProvider = options.timeProvider or function()
+        return 0
+    end
     local tiles = {}
 
     for top = 0, height - 1, tileHeight do
@@ -81,13 +120,27 @@ function Renderer.new(options)
         nextTile = 1,
         totalTiles = #tiles,
         completedTiles = 0,
+        completedPasses = 0,
+        currentPass = 1,
+        completedPassPixels = 0,
+        completedSamplePixels = 0,
+        totalSamplePixels = width * height * samplesPerPixel,
         seed = options.seed or 1,
         presenter = presenter,
+        timeProvider = timeProvider,
+        renderStartTime = 0,
+        renderEndTime = 0,
+        elapsedSeconds = 0,
+        lastStepSeconds = 0,
+        pixelsPerSecond = 0,
+        samplesPerSecond = 0,
+        pathsPerSecond = 0,
         nextPixel = 0,
         totalPixels = width * height,
         completedPixels = 0,
         totalSamples = 0,
         totalRays = 0,
+        lastTile = nil,
         complete = false,
         cancelled = false,
         started = false,
@@ -99,14 +152,29 @@ function Renderer:reset()
     self.film:clear()
     self.nextTile = 1
     self.completedTiles = 0
+    self.completedPasses = 0
+    self.currentPass = 1
+    self.completedPassPixels = 0
+    self.completedSamplePixels = 0
     self.nextPixel = 0
     self.completedPixels = 0
     self.totalSamples = 0
     self.totalRays = 0
+    self.lastTile = nil
+    self.renderStartTime = 0
+    self.renderEndTime = 0
+    self.elapsedSeconds = 0
+    self.lastStepSeconds = 0
+    self.pixelsPerSecond = 0
+    self.samplesPerSecond = 0
+    self.pathsPerSecond = 0
     self.complete = false
     self.cancelled = false
     self.started = false
     self.reportedComplete = false
+    if self.integrator.resetStats then
+        self.integrator:resetStats()
+    end
 end
 
 function Renderer:cancel()
@@ -122,14 +190,28 @@ function Renderer:isComplete()
 end
 
 function Renderer:progress()
-    return self.totalPixels == 0 and 1 or self.completedPixels / self.totalPixels
+    if self.totalSamplePixels == 0 then
+        return 1
+    end
+    return (self.completedPasses * self.totalPixels + self.completedPassPixels)
+        / self.totalSamplePixels
 end
 
 function Renderer:getStats()
+    local integratorStats = nil
+    if self.integrator.getStats then
+        integratorStats = self.integrator:getStats()
+    end
+
     return {
         width = self.width,
         height = self.height,
         samplesPerPixel = self.samplesPerPixel,
+        currentPass = self.currentPass,
+        completedPasses = self.completedPasses,
+        completedPassPixels = self.completedPassPixels,
+        completedSamplePixels = self.completedSamplePixels,
+        totalSamplePixels = self.totalSamplePixels,
         tileSize = self.tileSize,
         tileWidth = self.tileWidth,
         tileHeight = self.tileHeight,
@@ -139,26 +221,27 @@ function Renderer:getStats()
         completedPixels = self.completedPixels,
         totalSamples = self.totalSamples,
         totalRays = self.totalRays,
+        elapsedSeconds = self.elapsedSeconds,
+        lastStepSeconds = self.lastStepSeconds,
+        pixelsPerSecond = self.pixelsPerSecond,
+        samplesPerSecond = self.samplesPerSecond,
+        pathsPerSecond = self.pathsPerSecond,
+        integrator = integratorStats,
         progress = self:progress(),
         complete = self.complete,
         cancelled = self.cancelled,
     }
 end
 
-function Renderer:renderPixel(pixelIndex)
+function Renderer:renderPixel(pixelIndex, sampleIndex)
     local x = pixelIndex % self.width
     local y = math.floor(pixelIndex / self.width)
-    local accumulated = Vec3.new(0, 0, 0)
-
-    for sample = 1, self.samplesPerPixel do
-        local rng = RNG.new(deriveSampleSeed(self.seed, pixelIndex, sample))
-        local ray = self.camera:getRay(x, y, rng)
-        accumulated = accumulated + self.integrator:trace(ray, self.scene, rng)
-        self.totalSamples = self.totalSamples + 1
-        self.totalRays = self.totalRays + 1
-    end
-
-    self.film:set(x, y, accumulated / self.samplesPerPixel)
+    local rng = RNG.new(deriveSampleSeed(self.seed, pixelIndex, sampleIndex))
+    local ray = self.camera:getRay(x, y, rng)
+    local color = self.integrator:trace(ray, self.scene, rng)
+    self.film:addSample(x, y, color)
+    self.totalSamples = self.totalSamples + 1
+    self.totalRays = self.totalRays + 1
 end
 
 function Renderer:step(tileBudget)
@@ -166,11 +249,18 @@ function Renderer:step(tileBudget)
         return 0
     end
 
+    local stepStartTime = self.timeProvider()
     local budget = math.max(1, math.floor(tileBudget or 1))
     local processedTiles = 0
+    self.lastTile = nil
 
     if not self.started then
         self.started = true
+        self.renderStartTime = stepStartTime
+        self.currentPass = 1
+        if self.integrator.resetStats then
+            self.integrator:resetStats()
+        end
         if self.presenter and self.presenter.onStart then
             self.presenter:onStart(self.width, self.height, self)
         end
@@ -182,27 +272,49 @@ function Renderer:step(tileBudget)
 
         for row = 0, tile.height - 1 do
             for column = 0, tile.width - 1 do
-                self:renderPixel(firstPixel + row * self.width + column)
-                self.completedPixels = self.completedPixels + 1
-                self.nextPixel = self.nextPixel + 1
+                self:renderPixel(firstPixel + row * self.width + column, self.currentPass)
+                self.completedPassPixels = self.completedPassPixels + 1
+                self.completedSamplePixels = self.completedSamplePixels + 1
             end
         end
 
         self.nextTile = self.nextTile + 1
         self.completedTiles = self.completedTiles + 1
+        self.completedPixels = self.completedPassPixels
+        self.nextPixel = self.completedPassPixels
+        self.lastTile = tile
         processedTiles = processedTiles + 1
 
         if self.presenter and self.presenter.onTile then
             self.presenter:onTile(tile.x, tile.y, tile.width, tile.height, self.film, self)
         end
+
+        if self.nextTile > self.totalTiles then
+            self.completedPasses = self.completedPasses + 1
+            if self.completedPasses >= self.samplesPerPixel then
+                self.complete = true
+                self.completedPixels = self.totalPixels
+                self.completedPassPixels = 0
+            else
+                self.currentPass = self.completedPasses + 1
+                self.nextTile = 1
+                self.completedTiles = 0
+                self.completedPassPixels = 0
+                self.completedPixels = 0
+                self.nextPixel = 0
+            end
+        end
     end
 
-    if self.nextTile > self.totalTiles and not self.cancelled then
-        self.complete = true
-    end
+    local stepEndTime = self.timeProvider()
+    updatePerformanceStats(self, stepEndTime - stepStartTime, stepEndTime)
 
     if self.presenter and self.presenter.onProgress then
-        self.presenter:onProgress(self.completedPixels, self.totalPixels, self)
+        self.presenter:onProgress(
+            self.completedPasses * self.totalPixels + self.completedPassPixels,
+            self.totalSamplePixels,
+            self
+        )
     end
     if self.complete and not self.reportedComplete and self.presenter and self.presenter.onComplete then
         self.reportedComplete = true

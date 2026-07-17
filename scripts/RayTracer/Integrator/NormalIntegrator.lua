@@ -10,6 +10,13 @@ function NormalIntegrator.new(background)
     }, NormalIntegrator)
 end
 
+function NormalIntegrator:resetStats()
+end
+
+function NormalIntegrator:getStats()
+    return nil
+end
+
 function NormalIntegrator:trace(ray, scene)
     local record = scene:hit(ray, Interval.new(0.001, math.huge))
     if record ~= nil then

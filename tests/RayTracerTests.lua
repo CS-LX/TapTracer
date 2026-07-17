@@ -98,7 +98,8 @@ local function createTestRenderer(options)
         tileSize = options.tileSize or 4,
         seed = options.seed or 42,
         presenter = options.presenter,
-        integrator = RT.NormalIntegrator.new(),
+        integrator = options.integrator or RT.NormalIntegrator.new(),
+        timeProvider = options.timeProvider,
     }
 end
 
@@ -131,6 +132,17 @@ local function testPhaseCRenderer()
     assertNear(blockingStats.completedPixels, 90, 0, "completed pixel count")
     assertNear(blockingStats.totalSamples, 180, 0, "total sample count")
     assertNear(blockingStats.totalRays, 180, 0, "total ray count")
+    assertNear(blockingStats.completedPasses, 2, 0, "completed pass count")
+    assertNear(blockingStats.completedSamplePixels, 180, 0, "completed sample pixels")
+    assertNear(blockingStats.totalSamplePixels, 180, 0, "total sample pixels")
+    assert(blockingStats.elapsedSeconds >= 0, "renderer elapsed time")
+    assert(blockingStats.lastStepSeconds >= 0, "renderer step time")
+    assert(blockingStats.pixelsPerSecond >= 0, "renderer pixel throughput")
+    assert(blockingStats.samplesPerSecond >= 0, "renderer sample throughput")
+    if blockingStats.integrator ~= nil then
+        assert(blockingStats.integrator.pathCount == 180, "integrator path count")
+        assert(blockingStats.integrator.bounceCount >= 180, "integrator bounce count")
+    end
 
     local stepped = createTestRenderer {
         width = 10,
@@ -141,6 +153,7 @@ local function testPhaseCRenderer()
     }
     assertNear(stepped:step(1), 1, 0, "one tile step")
     assertNear(stepped:getStats().completedPixels, 16, 0, "first tile pixels")
+    assertNear(stepped:getStats().completedSamplePixels, 16, 0, "first pass sample pixels")
     assert(stepped:progress() < 1, "partial renderer should not be complete")
     stepped:render()
     filmsMatch(blocking.film, stepped.film)
@@ -151,10 +164,58 @@ local function testPhaseCRenderer()
     assertNear(afterReset.completedTiles, 0, 0, "reset tile count")
     assertNear(afterReset.completedPixels, 0, 0, "reset pixel count")
     assertNear(afterReset.totalSamples, 0, 0, "reset sample count")
+    assertNear(afterReset.completedPasses, 0, 0, "reset pass count")
+    assertNear(afterReset.completedSamplePixels, 0, 0, "reset sample pixels")
     assert(not afterReset.complete and not afterReset.cancelled, "reset should clear renderer state")
     stepped:render()
     filmsMatch(blocking.film, stepped.film)
     assert(resetStats.complete, "pre-reset renderer should have completed")
+
+    local wideBudget = createTestRenderer {
+        width = 10,
+        height = 9,
+        tileSize = 4,
+        samplesPerPixel = 2,
+        seed = 99,
+    }
+    wideBudget:render()
+    filmsMatch(blocking.film, wideBudget.film)
+
+    local clock = 0
+    local pathRenderer = createTestRenderer {
+        width = 4,
+        height = 3,
+        tileSize = 2,
+        samplesPerPixel = 2,
+        integrator = RT.PathIntegrator.new {
+            maxDepth = 3,
+            background = Vec3.new(0.2, 0.3, 0.4),
+        },
+        timeProvider = function()
+            clock = clock + 0.01
+            return clock
+        end,
+    }
+    pathRenderer:render()
+    local pathStats = pathRenderer:getStats()
+    assert(pathStats.elapsedSeconds > 0, "injected clock elapsed time")
+    assert(pathStats.pathsPerSecond > 0, "path throughput")
+    assert(pathStats.integrator ~= nil, "path integrator stats")
+    assert(pathStats.integrator.pathCount == 24, "path renderer count")
+    assert(pathStats.integrator.bounceCount >= pathStats.integrator.pathCount, "path bounce count")
+    assert(pathStats.integrator.hitCount + pathStats.integrator.missCount == pathStats.integrator.bounceCount, "path hit miss accounting")
+    pathRenderer:reset()
+    local resetPathStats = pathRenderer:getStats()
+    assert(resetPathStats.integrator.pathCount == 0, "reset integrator stats")
+
+    local passFilm = RT.Film.new(1, 1)
+    passFilm:addSample(0, 0, Vec3.new(0.2, 0.4, 0.6))
+    passFilm:addSample(0, 0, Vec3.new(0.6, 0.8, 1.0))
+    local passRed, passGreen, passBlue = passFilm:get(0, 0)
+    assertNear(passRed, 0.4, 1e-8, "film running red average")
+    assertNear(passGreen, 0.6, 1e-8, "film running green average")
+    assertNear(passBlue, 0.8, 1e-8, "film running blue average")
+    assertNear(passFilm:getSampleCount(0, 0), 2, 0, "film sample count")
 
     local cancelledTiles = 0
     local callback = RT.CallbackPresenter.new {

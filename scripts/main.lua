@@ -37,6 +37,8 @@ local displayTexture_ = nil
 ---@type BorderImage|nil
 local displayCanvas_ = nil
 local displayedPixels_ = 0
+local displayUploadSeconds_ = 0
+local displayUploadCount_ = 0
 local reportedComplete_ = false
 
 local function addBox(scene, minimum, maximum, material)
@@ -191,6 +193,9 @@ local function buildRenderer()
         tileWidth = CONFIG.progressiveChunkWidth,
         tileHeight = 1,
         seed = 42,
+        timeProvider = function()
+            return GetTime():GetElapsedTime()
+        end,
         integrator = RayTracer.PathIntegrator.new {
             maxDepth = CONFIG.maxDepth,
             background = RayTracer.Vec3.new(0.16, 0.42, 0.92),
@@ -219,6 +224,8 @@ local function buildDisplayTexture()
     displayCanvas_:SetPriority(-100)
     ui.root:AddChild(displayCanvas_)
     displayedPixels_ = 0
+    displayUploadSeconds_ = 0
+    displayUploadCount_ = 0
     print(string.format(
         "[RayTracer] live display texture ready: %dx%d",
         CONFIG.width,
@@ -226,33 +233,31 @@ local function buildDisplayTexture()
     ))
 end
 
-local function updateDisplayPixels(completedPixels)
+local function updateDisplayTile(tile)
     local image = displayImage_
     local texture = displayTexture_
     local frame = frame_
-    if image == nil or texture == nil or frame == nil then
+    if image == nil or texture == nil or frame == nil or tile == nil then
         return
     end
 
-    local lastPixel = math.min(frame.width * frame.height, completedPixels)
-    if lastPixel <= displayedPixels_ then
-        return
+    for row = tile.y, tile.y + tile.height - 1 do
+        for column = tile.x, tile.x + tile.width - 1 do
+            local r, g, b = frame:get(column, row)
+            image:SetPixel(column, row, Color(
+                encodeDisplayChannel(r),
+                encodeDisplayChannel(g),
+                encodeDisplayChannel(b),
+                1.0
+            ))
+        end
     end
 
-    for pixelIndex = displayedPixels_, lastPixel - 1 do
-        local x = pixelIndex % frame.width
-        local y = math.floor(pixelIndex / frame.width)
-        local r, g, b = frame:get(x, y)
-        image:SetPixel(x, y, Color(
-            encodeDisplayChannel(r),
-            encodeDisplayChannel(g),
-            encodeDisplayChannel(b),
-            1.0
-        ))
-    end
-
+    local uploadStart = GetTime():GetElapsedTime()
     texture:SetData(image, false)
-    displayedPixels_ = lastPixel
+    displayUploadSeconds_ = displayUploadSeconds_
+        + math.max(0, GetTime():GetElapsedTime() - uploadStart)
+    displayUploadCount_ = displayUploadCount_ + 1
 end
 
 local function layoutDisplayCanvas()
@@ -370,6 +375,36 @@ local function buildUI()
     UI.SetRoot(uiRoot_)
 end
 
+local function printRenderStats(renderer)
+    local stats = renderer:getStats()
+    local integrator = stats.integrator or {}
+    local accelerator = scene_ and scene_:getAccelerator()
+    local bvh = accelerator and accelerator:getStats() or {}
+    print(string.format(
+        "[RayTracer][F] compute=%.3fs pixels/s=%.1f samples/s=%.1f paths/s=%.1f",
+        stats.elapsedSeconds,
+        stats.pixelsPerSecond,
+        stats.samplesPerSecond,
+        stats.pathsPerSecond
+    ))
+    print(string.format(
+        "[RayTracer][F] paths=%d bounces=%d avgDepth=%.3f hits=%d misses=%d shadows=%d",
+        integrator.pathCount or 0,
+        integrator.bounceCount or 0,
+        integrator.averagePathDepth or 0,
+        integrator.hitCount or 0,
+        integrator.missCount or 0,
+        integrator.shadowRayCount or 0
+    ))
+    print(string.format(
+        "[RayTracer][F] BVH boxes=%d primitives=%d displayUploads=%d upload=%.3fs",
+        bvh.boxTests or 0,
+        bvh.primitiveTests or 0,
+        displayUploadCount_,
+        displayUploadSeconds_
+    ))
+end
+
 function Start()
     graphics.windowTitle = CONFIG.title
     input.mouseMode = MM_ABSOLUTE
@@ -404,23 +439,23 @@ function HandleUpdate(eventType, eventData)
     if not renderer:isComplete() then
         renderer:step(CONFIG.maxTilesPerStep)
         frame_ = renderer.film
-        local progress = renderer:progress()
-        local completedPixels = renderer.completedPixels
-        local completedRows = math.floor(completedPixels / CONFIG.width)
-        local rowPixels = completedPixels % CONFIG.width
-        updateDisplayPixels(completedPixels)
+        local stats = renderer:getStats()
+        local progress = stats.progress
+        local tile = renderer.lastTile
+        updateDisplayTile(tile)
+        local pass = math.min(CONFIG.samplesPerPixel, stats.currentPass)
+        local passProgress = stats.completedPassPixels / stats.totalPixels
         statusLabel:SetText(string.format(
-            "真实扫描中 · 第 %d/%d 行 · 当前行 %d/%d · %.1f%%",
-            math.min(CONFIG.height, completedRows + 1),
-            CONFIG.height,
-            rowPixels,
-            CONFIG.width,
+            "逐轮累积中 · 第 %d/%d 轮 · 当前轮 %.1f%% · 总进度 %.1f%%",
+            pass,
+            CONFIG.samplesPerPixel,
+            passProgress * 100,
             progress * 100
         ))
         progressBar:SetValue(progress)
     elseif not reportedComplete_ then
         frame_ = renderer.film
-        updateDisplayPixels(renderer.totalPixels)
+        updateDisplayTile(renderer.lastTile)
         statusLabel:SetText("渲染完成 · Poolcore Courtyard")
         progressBar:SetValue(1)
         reportedComplete_ = true
@@ -433,6 +468,7 @@ function HandleUpdate(eventType, eventData)
                 stats.primitiveTests
             ))
         end
+        printRenderStats(renderer)
         print("[RayTracer] render complete")
     end
 end
