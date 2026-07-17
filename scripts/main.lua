@@ -3,10 +3,10 @@ local UI = require("urhox-libs/UI")
 
 local CONFIG = {
     title = "CPU Ray Tracer · 第二轮材质球",
-    width = 96,
-    height = 54,
+    width = 128,
+    height = 72,
     samplesPerPixel = 4,
-    maxTilesPerStep = 1,
+    maxTilesPerStep = 2,
     maxDepth = 8,
 }
 
@@ -170,14 +170,41 @@ local function drawPixelImage(ctx, left, top, width, height)
         return
     end
 
-    local cellW = width / frame_.width
-    local cellH = height / frame_.height
-    for y = 0, frame_.height - 1 do
-        for x = 0, frame_.width - 1 do
-            local r, g, b = frame_:get(x, y)
+    local displayWidth = math.min(frame_.width, 96)
+    local displayHeight = math.floor(displayWidth * frame_.height / frame_.width)
+    local cellW = width / displayWidth
+    local cellH = height / displayHeight
+
+    for y = 0, displayHeight - 1 do
+        local sourceTop = math.floor(y * frame_.height / displayHeight)
+        local sourceBottom = math.max(
+            sourceTop,
+            math.ceil((y + 1) * frame_.height / displayHeight) - 1
+        )
+        for x = 0, displayWidth - 1 do
+            local sourceLeft = math.floor(x * frame_.width / displayWidth)
+            local sourceRight = math.max(
+                sourceLeft,
+                math.ceil((x + 1) * frame_.width / displayWidth) - 1
+            )
+            local red = 0.0
+            local green = 0.0
+            local blue = 0.0
+            local count = 0
+
+            for sourceY = sourceTop, sourceBottom do
+                for sourceX = sourceLeft, sourceRight do
+                    local r, g, b = frame_:get(sourceX, sourceY)
+                    red = red + r
+                    green = green + g
+                    blue = blue + b
+                    count = count + 1
+                end
+            end
+
             nvgBeginPath(ctx)
             nvgRect(ctx, left + x * cellW, top + y * cellH, cellW + 0.5, cellH + 0.5)
-            nvgFillColor(ctx, colorToRgba(r, g, b))
+            nvgFillColor(ctx, colorToRgba(red / count, green / count, blue / count))
             nvgFill(ctx)
         end
     end
