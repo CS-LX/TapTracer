@@ -7,6 +7,8 @@
 ---@field height number
 ---@field samplesPerPixel number
 ---@field tileSize number
+---@field tileWidth number
+---@field tileHeight number
 ---@field tiles table
 ---@field nextTile number
 ---@field totalTiles number
@@ -29,6 +31,15 @@ local Vec3 = require "RayTracer.Math.Vec3"
 local Film = require "RayTracer.Core.Film"
 local RNG = require "RayTracer.Math.RNG"
 
+local function deriveSampleSeed(baseSeed, pixelIndex, sampleIndex)
+    local value = (baseSeed
+        ~ (pixelIndex * 0x9E3779B9)
+        ~ (sampleIndex * 0x85EBCA6B)) & 0xFFFFFFFF
+    value = ((value ~ (value >> 16)) * 0x7FEB352D) & 0xFFFFFFFF
+    value = ((value ~ (value >> 15)) * 0x846CA68B) & 0xFFFFFFFF
+    return (value ~ (value >> 16)) & 0xFFFFFFFF
+end
+
 function Renderer.new(options)
     options = options or {}
     assert(options.camera ~= nil, "Renderer requires a camera")
@@ -39,16 +50,18 @@ function Renderer.new(options)
     local height = options.height or options.camera.imageHeight
     local samplesPerPixel = options.samplesPerPixel or 1
     local tileSize = options.tileSize or 8
+    local tileWidth = options.tileWidth or tileSize
+    local tileHeight = options.tileHeight or tileSize
     local presenter = options.presenter
     local tiles = {}
 
-    for top = 0, height - 1, tileSize do
-        for left = 0, width - 1, tileSize do
+    for top = 0, height - 1, tileHeight do
+        for left = 0, width - 1, tileWidth do
             tiles[#tiles + 1] = {
                 x = left,
                 y = top,
-                width = math.min(tileSize, width - left),
-                height = math.min(tileSize, height - top),
+                width = math.min(tileWidth, width - left),
+                height = math.min(tileHeight, height - top),
             }
         end
     end
@@ -62,6 +75,8 @@ function Renderer.new(options)
         height = height,
         samplesPerPixel = samplesPerPixel,
         tileSize = tileSize,
+        tileWidth = tileWidth,
+        tileHeight = tileHeight,
         tiles = tiles,
         nextTile = 1,
         totalTiles = #tiles,
@@ -116,6 +131,8 @@ function Renderer:getStats()
         height = self.height,
         samplesPerPixel = self.samplesPerPixel,
         tileSize = self.tileSize,
+        tileWidth = self.tileWidth,
+        tileHeight = self.tileHeight,
         totalTiles = self.totalTiles,
         completedTiles = self.completedTiles,
         totalPixels = self.totalPixels,
@@ -134,7 +151,7 @@ function Renderer:renderPixel(pixelIndex)
     local accumulated = Vec3.new(0, 0, 0)
 
     for sample = 1, self.samplesPerPixel do
-        local rng = RNG.new(self.seed + pixelIndex * 977 + sample * 131)
+        local rng = RNG.new(deriveSampleSeed(self.seed, pixelIndex, sample))
         local ray = self.camera:getRay(x, y, rng)
         accumulated = accumulated + self.integrator:trace(ray, self.scene, rng)
         self.totalSamples = self.totalSamples + 1

@@ -3,14 +3,15 @@ local UI = require("urhox-libs/UI")
 
 local CONFIG = {
     title = "CPU Ray Tracer · Cornell Box",
-    width = 128,
-    height = 72,
+    width = 160,
+    height = 90,
     samplesPerPixel = 16,
-    maxTilesPerStep = 2,
+    progressiveChunkWidth = 64,
+    maxTilesPerStep = 1,
     maxDepth = 8,
     denoise = false,
-    rawDisplayWidth = 112,
-    denoisedDisplayWidth = 96,
+    rawDisplayWidth = 160,
+    denoisedDisplayWidth = 128,
 }
 
 ---@type table|nil
@@ -29,6 +30,13 @@ local statusLabel_ = nil
 local progressBar_ = nil
 ---@type Panel|nil
 local uiRoot_ = nil
+---@type Image|nil
+local displayImage_ = nil
+---@type Texture2D|nil
+local displayTexture_ = nil
+---@type BorderImage|nil
+local displayCanvas_ = nil
+local displayedPixels_ = 0
 local reportedComplete_ = false
 
 local function addBox(scene, minimum, maximum, material)
@@ -176,12 +184,97 @@ local function buildRenderer()
         samplesPerPixel = CONFIG.samplesPerPixel,
         maxDepth = CONFIG.maxDepth,
         tileSize = 8,
+        tileWidth = CONFIG.progressiveChunkWidth,
+        tileHeight = 1,
         seed = 42,
         integrator = RayTracer.PathIntegrator.new {
             maxDepth = CONFIG.maxDepth,
             background = RayTracer.Vec3.new(0, 0, 0),
         },
     }
+end
+
+local function encodeDisplayChannel(value)
+    return math.max(0, math.min(1, value))
+end
+
+local function buildDisplayTexture()
+    displayImage_ = Image:new()
+    displayImage_:SetSize(CONFIG.width, CONFIG.height, 4)
+    displayImage_:Clear(Color(0.02, 0.03, 0.05, 1.0))
+
+    displayTexture_ = Texture2D:new()
+    displayTexture_:SetSRGB(false)
+    displayTexture_:SetNumLevels(1)
+    displayTexture_:SetFilterMode(FILTER_NEAREST)
+    displayTexture_:SetData(displayImage_, false)
+
+    displayCanvas_ = BorderImage:new()
+    displayCanvas_:SetTexture(displayTexture_)
+    displayCanvas_:SetImageRect(IntRect(0, 0, CONFIG.width, CONFIG.height))
+    displayCanvas_:SetPriority(-100)
+    ui.root:AddChild(displayCanvas_)
+    displayedPixels_ = 0
+    print(string.format(
+        "[RayTracer] live display texture ready: %dx%d",
+        CONFIG.width,
+        CONFIG.height
+    ))
+end
+
+local function updateDisplayPixels(completedPixels)
+    local image = displayImage_
+    local texture = displayTexture_
+    local frame = frame_
+    if image == nil or texture == nil or frame == nil then
+        return
+    end
+
+    local lastPixel = math.min(frame.width * frame.height, completedPixels)
+    if lastPixel <= displayedPixels_ then
+        return
+    end
+
+    for pixelIndex = displayedPixels_, lastPixel - 1 do
+        local x = pixelIndex % frame.width
+        local y = math.floor(pixelIndex / frame.width)
+        local r, g, b = frame:get(x, y)
+        image:SetPixel(x, y, Color(
+            encodeDisplayChannel(r),
+            encodeDisplayChannel(g),
+            encodeDisplayChannel(b),
+            1.0
+        ))
+    end
+
+    texture:SetData(image, false)
+    displayedPixels_ = lastPixel
+end
+
+local function layoutDisplayCanvas()
+    local canvas = displayCanvas_
+    if canvas == nil then
+        return
+    end
+
+    local physicalW = graphics:GetWidth()
+    local physicalH = graphics:GetHeight()
+    local dpr = math.max(1, graphics:GetDPR())
+    local logicalW = physicalW / dpr
+    local logicalH = physicalH / dpr
+    local imageWidth = math.min(logicalW - 48, logicalH * 1.65)
+    local imageHeight = imageWidth * CONFIG.height / CONFIG.width
+    local imageLeft = (logicalW - imageWidth) * 0.5
+    local imageTop = math.max(56, (logicalH - imageHeight) * 0.5)
+
+    canvas:SetPosition(
+        math.floor(imageLeft * dpr),
+        math.floor(imageTop * dpr)
+    )
+    canvas:SetSize(
+        math.floor(imageWidth * dpr),
+        math.floor(imageHeight * dpr)
+    )
 end
 
 local function buildUI()
@@ -273,91 +366,6 @@ local function buildUI()
     UI.SetRoot(uiRoot_)
 end
 
-local function colorToRgba(r, g, b)
-    local function encode(value)
-        return math.floor(
-            math.max(0, math.min(1, value)) * 255
-        )
-    end
-
-    return nvgRGBA(encode(r), encode(g), encode(b), 255)
-end
-
-local function drawRawPixelImage(ctx, left, top, width, height)
-    local displayWidth = math.min(frame_.width, CONFIG.rawDisplayWidth)
-    local displayHeight = math.floor(displayWidth * frame_.height / frame_.width)
-    local cellW = width / displayWidth
-    local cellH = height / displayHeight
-
-    for y = 0, displayHeight - 1 do
-        local sourceY = math.min(
-            frame_.height - 1,
-            math.floor(y * frame_.height / displayHeight)
-        )
-        for x = 0, displayWidth - 1 do
-            local sourceX = math.min(
-                frame_.width - 1,
-                math.floor(x * frame_.width / displayWidth)
-            )
-            local r, g, b = frame_:get(sourceX, sourceY)
-            nvgBeginPath(ctx)
-            nvgRect(ctx, left + x * cellW, top + y * cellH, cellW + 0.5, cellH + 0.5)
-            nvgFillColor(ctx, colorToRgba(r, g, b))
-            nvgFill(ctx)
-        end
-    end
-end
-
-local function drawPixelImage(ctx, left, top, width, height)
-    if frame_ == nil then
-        return
-    end
-
-    if not CONFIG.denoise then
-        drawRawPixelImage(ctx, left, top, width, height)
-        return
-    end
-
-    local displayWidth = math.min(frame_.width, CONFIG.denoisedDisplayWidth)
-    local displayHeight = math.floor(displayWidth * frame_.height / frame_.width)
-    local cellW = width / displayWidth
-    local cellH = height / displayHeight
-
-    for y = 0, displayHeight - 1 do
-        local sourceTop = math.floor(y * frame_.height / displayHeight)
-        local sourceBottom = math.max(
-            sourceTop,
-            math.ceil((y + 1) * frame_.height / displayHeight) - 1
-        )
-        for x = 0, displayWidth - 1 do
-            local sourceLeft = math.floor(x * frame_.width / displayWidth)
-            local sourceRight = math.max(
-                sourceLeft,
-                math.ceil((x + 1) * frame_.width / displayWidth) - 1
-            )
-            local red = 0.0
-            local green = 0.0
-            local blue = 0.0
-            local count = 0
-
-            for sourceY = sourceTop, sourceBottom do
-                for sourceX = sourceLeft, sourceRight do
-                    local r, g, b = frame_:get(sourceX, sourceY)
-                    red = red + r
-                    green = green + g
-                    blue = blue + b
-                    count = count + 1
-                end
-            end
-
-            nvgBeginPath(ctx)
-            nvgRect(ctx, left + x * cellW, top + y * cellH, cellW + 0.5, cellH + 0.5)
-            nvgFillColor(ctx, colorToRgba(red / count, green / count, blue / count))
-            nvgFill(ctx)
-        end
-    end
-end
-
 function Start()
     graphics.windowTitle = CONFIG.title
     input.mouseMode = MM_ABSOLUTE
@@ -369,6 +377,8 @@ function Start()
     end
 
     buildUI()
+    buildDisplayTexture()
+    layoutDisplayCanvas()
     buildScene()
     buildRenderer()
     SubscribeToEvent("Update", "HandleUpdate")
@@ -391,9 +401,22 @@ function HandleUpdate(eventType, eventData)
         renderer:step(CONFIG.maxTilesPerStep)
         frame_ = renderer.film
         local progress = renderer:progress()
-        statusLabel:SetText(string.format("渲染中 %.1f%%", progress * 100))
+        local completedPixels = renderer.completedPixels
+        local completedRows = math.floor(completedPixels / CONFIG.width)
+        local rowPixels = completedPixels % CONFIG.width
+        updateDisplayPixels(completedPixels)
+        statusLabel:SetText(string.format(
+            "真实扫描中 · 第 %d/%d 行 · 当前行 %d/%d · %.1f%%",
+            math.min(CONFIG.height, completedRows + 1),
+            CONFIG.height,
+            rowPixels,
+            CONFIG.width,
+            progress * 100
+        ))
         progressBar:SetValue(progress)
     elseif not reportedComplete_ then
+        frame_ = renderer.film
+        updateDisplayPixels(renderer.totalPixels)
         statusLabel:SetText("渲染完成 · Cornell Box")
         progressBar:SetValue(1)
         reportedComplete_ = true
@@ -414,6 +437,7 @@ end
 ---@param eventData ScreenModeEventData
 function HandleScreenMode(eventType, eventData)
     UI.MarkLayoutDirty()
+    layoutDisplayCanvas()
 end
 
 ---@param eventType string
@@ -439,12 +463,6 @@ function HandleRender(eventType, eventData)
     nvgRect(vg, 0, 0, logicalW, logicalH)
     nvgFillColor(vg, nvgRGBA(8, 12, 20, 255))
     nvgFill(vg)
-
-    local imageWidth = math.min(logicalW - 48, logicalH * 1.65)
-    local imageHeight = imageWidth * CONFIG.height / CONFIG.width
-    local imageLeft = (logicalW - imageWidth) * 0.5
-    local imageTop = math.max(56, (logicalH - imageHeight) * 0.5)
-    drawPixelImage(vg, imageLeft, imageTop, imageWidth, imageHeight)
 
     nvgEndFrame(vg)
 end
