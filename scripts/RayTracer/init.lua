@@ -20,6 +20,7 @@ local Dielectric = require "RayTracer.Material.Dielectric"
 local DiffuseLight = require "RayTracer.Material.DiffuseLight"
 local SolidColor = require "RayTracer.Texture.SolidColor"
 local Checker = require "RayTracer.Texture.Checker"
+local ImageTexture = require "RayTracer.Texture.ImageTexture"
 local PPMWriter = require "RayTracer.IO.PPMWriter"
 local AsciiPresenter = require "RayTracer.IO.AsciiPresenter"
 local AnsiPresenter = require "RayTracer.IO.AnsiPresenter"
@@ -49,6 +50,7 @@ return {
     DiffuseLight = DiffuseLight,
     SolidColor = SolidColor,
     Checker = Checker,
+    ImageTexture = ImageTexture,
     PPMWriter = PPMWriter,
     AsciiPresenter = AsciiPresenter,
     AnsiPresenter = AnsiPresenter,

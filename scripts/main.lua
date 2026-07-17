@@ -83,6 +83,13 @@ local function buildScene()
     local red = RayTracer.Lambertian.new(Vec3.new(0.65, 0.05, 0.05))
     local green = RayTracer.Lambertian.new(Vec3.new(0.12, 0.45, 0.15))
     local white = RayTracer.Lambertian.new(Vec3.new(0.73, 0.73, 0.73))
+    local imageTexture = RayTracer.ImageTexture.fromPPM([[P3
+2 2
+255
+220 40 40   40 210 70
+40 90 220   235 235 235
+]])
+    local texturedWhite = RayTracer.Lambertian.new(imageTexture)
     local light = RayTracer.DiffuseLight.new(
         RayTracer.SolidColor.new(Vec3.new(1.0, 1.0, 1.0)),
         8.0
@@ -137,7 +144,7 @@ local function buildScene()
         scene_,
         Vec3.new(0.35, 0, 0.15),
         Vec3.new(2.15, 3.35, 1.75),
-        white
+        texturedWhite
     )
 
     camera_ = RayTracer.Camera.new {

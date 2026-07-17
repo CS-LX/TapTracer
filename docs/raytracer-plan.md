@@ -331,6 +331,7 @@ job:GetStats()
 - DiffuseLight；
 - Solid、Checker 和 PPM Image Texture；
 - UV；
+- 当前已完成最小 `ImageTexture.fromPPM()`：核心接收 ASCII P3 PPM 文本，按命中记录的 `u/v` 采样并保持原始线性 RGB；文件读取继续留在宿主适配层，核心不直接依赖文件系统；
 - 矩形面光源；
 - 显式光源采样；
 - 阴影射线；

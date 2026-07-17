@@ -337,6 +337,47 @@ local function testLightingAndTextures()
     assertVectorNear(checker:value(evenRecord), Vec3.new(0.8, 0.1, 0.05), 1e-8, "checker even")
     assertVectorNear(checker:value(oddRecord), Vec3.new(0.05, 0.1, 0.8), 1e-8, "checker odd")
 
+    local image = RT.ImageTexture.fromPPM([[P3
+2 2
+255
+255 0 0   0 255 0
+0 0 255   255 255 255
+]])
+    assertNear(image.width, 2, 0, "image texture width")
+    assertNear(image.height, 2, 0, "image texture height")
+    assertVectorNear(
+        image:value({ u = 0.1, v = 0.1 }),
+        Vec3.new(0, 0, 1),
+        1e-8,
+        "image texture bottom-left"
+    )
+    assertVectorNear(
+        image:value({ u = 0.9, v = 0.1 }),
+        Vec3.new(1, 1, 1),
+        1e-8,
+        "image texture bottom-right"
+    )
+    assertVectorNear(
+        image:value({ u = 0.1, v = 0.9 }),
+        Vec3.new(1, 0, 0),
+        1e-8,
+        "image texture top-left"
+    )
+    assertVectorNear(
+        image:value({ u = 0.9, v = 0.9 }),
+        Vec3.new(0, 1, 0),
+        1e-8,
+        "image texture top-right"
+    )
+
+    local texturedLambertian = RT.Lambertian.new(image)
+    local _, texturedAlbedo = texturedLambertian:scatter(
+        Ray.new(Vec3.new(0, 0, 1), Vec3.new(0, 0, -1)),
+        { point = Vec3.new(0, 0, 0), normal = Vec3.new(0, 0, 1), u = 0.9, v = 0.9 },
+        RT.RNG.new(17)
+    )
+    assertVectorNear(texturedAlbedo, Vec3.new(0, 1, 0), 1e-8, "textured Lambertian albedo")
+
     local light = RT.DiffuseLight.new(red, 3.0)
     local lightRecord = { point = Vec3.new(0, 0, 0), frontFace = true }
     assertVectorNear(light:emitted(lightRecord), Vec3.new(2.4, 0.3, 0.15), 1e-8, "emitted color")
