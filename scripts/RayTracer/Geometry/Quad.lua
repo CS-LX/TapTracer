@@ -26,6 +26,11 @@ function Quad.new(origin, edgeU, edgeV, material)
         edgeV = edgeV,
         normal = normal,
         area = area,
+        uu = edgeU:dot(edgeU),
+        uv = edgeU:dot(edgeV),
+        vv = edgeV:dot(edgeV),
+        determinant = edgeU:dot(edgeU) * edgeV:dot(edgeV)
+            - edgeU:dot(edgeV) * edgeU:dot(edgeV),
         material = material,
         box = AABB.new(edgeMin, edgeMax),
     }, Quad)
@@ -56,14 +61,10 @@ function Quad:hit(ray, rayInterval)
 
     local point = ray:at(t)
     local offset = point - self.origin
-    local uu = self.edgeU:dot(self.edgeU)
-    local uv = self.edgeU:dot(self.edgeV)
-    local vv = self.edgeV:dot(self.edgeV)
     local wu = offset:dot(self.edgeU)
     local wv = offset:dot(self.edgeV)
-    local determinant = uu * vv - uv * uv
-    local u = (wu * vv - wv * uv) / determinant
-    local v = (wv * uu - wu * uv) / determinant
+    local u = (wu * self.vv - wv * self.uv) / self.determinant
+    local v = (wv * self.uu - wu * self.uv) / self.determinant
     if u < 0 or u > 1 or v < 0 or v > 1 then
         return nil
     end

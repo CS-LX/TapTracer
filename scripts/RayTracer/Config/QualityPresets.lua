@@ -5,6 +5,7 @@ local PRESETS = {
         width = 256,
         height = 144,
         samplesPerPixel = 32,
+        maxDepth = 6,
         progressiveChunkWidth = 64,
         progressiveChunkHeight = 4,
         maxTilesPerStep = 1,

@@ -1,5 +1,6 @@
 local RT = require "RayTracer"
 local QualityPresets = require "RayTracer.Config.QualityPresets"
+local DisplayDenoise = require "RayTracer.Display.DisplayDenoise"
 
 local function assertNear(actual, expected, epsilon, label)
     if math.abs(actual - expected) > epsilon then
@@ -575,6 +576,7 @@ local function testQualityPresets()
     assertNear(preview.width, 256, 0, "preview width")
     assertNear(preview.height, 144, 0, "preview height")
     assertNear(preview.samplesPerPixel, 32, 0, "preview spp")
+    assertNear(preview.maxDepth, 6, 0, "preview max depth")
 
     local square = QualityPresets.get("quality-square")
     assertNear(square.width, 256, 0, "square width")
@@ -588,6 +590,33 @@ local function testQualityPresets()
 
     local ok = pcall(QualityPresets.get, "missing")
     assert(not ok, "unknown quality preset should fail")
+end
+
+local function testDisplayDenoise()
+    local film = RT.Film.new(3, 3)
+    for y = 0, 2 do
+        for x = 0, 2 do
+            if x == 1 and y == 1 then
+                film:addSample(x, y, Vec3.new(1.0, 0.0, 0.0))
+            else
+                film:addSample(x, y, Vec3.new(0.2, 0.2, 0.2))
+            end
+        end
+    end
+
+    local red, green, blue = DisplayDenoise.filterPixel(film, 1, 1, 3, 3)
+    assert(red > 0.8, "denoise should preserve center highlight")
+    assert(green < 0.2 and blue < 0.2, "denoise should preserve highlight color")
+
+    local edgeFilm = RT.Film.new(3, 3)
+    for y = 0, 2 do
+        for x = 0, 1 do
+            edgeFilm:addSample(x, y, Vec3.new(0.1, 0.1, 0.1))
+        end
+        edgeFilm:addSample(2, y, Vec3.new(0.9, 0.9, 0.9))
+    end
+    local edgeRed = DisplayDenoise.filterPixel(edgeFilm, 1, 1, 3, 3)
+    assert(edgeRed > 0.1 and edgeRed < 0.9, "denoise edge should remain bounded")
 end
 
 local function testOutput()
@@ -621,6 +650,7 @@ testLightingAndTextures()
 testQuadAndRussianRoulette()
 testCornellBoxSceneGeometry()
 testQualityPresets()
+testDisplayDenoise()
 testPhaseCRenderer()
 testPresenters()
 testOutput()

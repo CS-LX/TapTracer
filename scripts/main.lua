@@ -1,5 +1,6 @@
 local RayTracer = require "RayTracer"
 local QualityPresets = require "RayTracer.Config.QualityPresets"
+local DisplayDenoise = require "RayTracer.Display.DisplayDenoise"
 local UI = require("urhox-libs/UI")
 
 local ACTIVE_QUALITY = "preview"
@@ -14,8 +15,8 @@ local CONFIG = {
     progressiveChunkWidth = ACTIVE_PRESET.progressiveChunkWidth,
     progressiveChunkHeight = ACTIVE_PRESET.progressiveChunkHeight,
     maxTilesPerStep = ACTIVE_PRESET.maxTilesPerStep,
-    maxDepth = 8,
-    denoise = false,
+    maxDepth = ACTIVE_PRESET.maxDepth or 8,
+    denoise = true,
 }
 
 ---@type table|nil
@@ -43,6 +44,8 @@ local displayCanvas_ = nil
 local displayedPixels_ = 0
 local displayUploadSeconds_ = 0
 local displayUploadCount_ = 0
+local displayFilterSeconds_ = 0
+local displayFilterPixels_ = 0
 local pendingDisplayUpload_ = false
 local reportedComplete_ = false
 
@@ -231,6 +234,8 @@ local function buildDisplayTexture()
     displayedPixels_ = 0
     displayUploadSeconds_ = 0
     displayUploadCount_ = 0
+    displayFilterSeconds_ = 0
+    displayFilterPixels_ = 0
     pendingDisplayUpload_ = false
     print(string.format(
         "[RayTracer] live display texture ready: %dx%d",
@@ -261,16 +266,44 @@ local function updateDisplayTile(tile)
         return
     end
 
-    for row = tile.y, tile.y + tile.height - 1 do
-        for column = tile.x, tile.x + tile.width - 1 do
-            local r, g, b = frame:get(column, row)
+    local displayFrame = frame
+    if CONFIG.denoise then
+        displayFrame = {
+            get = function(_, column, row)
+                return DisplayDenoise.filterPixel(frame, column, row, CONFIG.width, CONFIG.height)
+            end,
+        }
+    end
+
+    local startX = tile.x
+    local startY = tile.y
+    local endX = tile.x + tile.width - 1
+    local endY = tile.y + tile.height - 1
+    if CONFIG.denoise then
+        startX = math.max(0, startX - 1)
+        startY = math.max(0, startY - 1)
+        endX = math.min(CONFIG.width - 1, endX + 1)
+        endY = math.min(CONFIG.height - 1, endY + 1)
+    end
+
+    local filterStart = CONFIG.denoise and GetTime():GetElapsedTime() or 0
+    local filteredPixels = 0
+    for row = startY, endY do
+        for column = startX, endX do
+            local r, g, b = displayFrame:get(column, row)
             image:SetPixel(column, row, Color(
                 encodeDisplayChannel(r),
                 encodeDisplayChannel(g),
                 encodeDisplayChannel(b),
                 1.0
             ))
+            filteredPixels = filteredPixels + 1
         end
+    end
+    if CONFIG.denoise then
+        displayFilterSeconds_ = displayFilterSeconds_
+            + math.max(0, GetTime():GetElapsedTime() - filterStart)
+        displayFilterPixels_ = displayFilterPixels_ + filteredPixels
     end
 
     pendingDisplayUpload_ = true
@@ -418,6 +451,12 @@ local function printRenderStats(renderer)
         bvh.primitiveTests or 0,
         displayUploadCount_,
         displayUploadSeconds_
+    ))
+    print(string.format(
+        "[RayTracer][H3] denoise=%s filter=%.3fs filteredPixels=%d",
+        tostring(CONFIG.denoise),
+        displayFilterSeconds_,
+        displayFilterPixels_
     ))
 end
 
