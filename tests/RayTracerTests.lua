@@ -303,6 +303,7 @@ local function testAcceleration()
     end
     scene:add(triangle)
     local bvh = scene:buildBVH()
+    assert(scene:getAccelerator() == bvh, "Scene should cache built BVH")
     local rays = {
         Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1)),
         Ray.new(Vec3.new(2, 0, 0), Vec3.new(0, 0, 1)),
@@ -310,12 +311,15 @@ local function testAcceleration()
         Ray.new(Vec3.new(20, 5, 0), Vec3.new(0, 0, 1)),
     }
     for index = 1, #rays do
-        local bruteHit = scene:hit(rays[index], interval)
-        local bvhHit = bvh:hit(rays[index], interval)
-        assert((bruteHit == nil) == (bvhHit == nil), "BVH hit presence " .. index)
+        local bruteHit = scene:hitBruteForce(rays[index], interval)
+        bvh:resetStats()
+        local acceleratedHit = scene:hit(rays[index], interval)
+        local traversalStats = bvh:getStats()
+        assert(traversalStats.boxTests > 0, "Scene should route hit through BVH " .. index)
+        assert((bruteHit == nil) == (acceleratedHit == nil), "BVH hit presence " .. index)
         if bruteHit ~= nil then
-            assertNear(bvhHit.t, bruteHit.t, 1e-8, "BVH hit distance " .. index)
-            assertVectorNear(bvhHit.normal, bruteHit.normal, 1e-8, "BVH hit normal " .. index)
+            assertNear(acceleratedHit.t, bruteHit.t, 1e-8, "BVH hit distance " .. index)
+            assertVectorNear(acceleratedHit.normal, bruteHit.normal, 1e-8, "BVH hit normal " .. index)
         end
     end
 
@@ -326,6 +330,23 @@ local function testAcceleration()
     assert(stats.nodeCount > 1 and stats.leafCount > 1, "BVH build stats")
     assert(stats.boxTests > 0, "BVH box tests")
     assert(stats.primitiveTests < #scene.objects, "BVH should reduce primitive tests")
+
+    local closerScene = RT.Scene.new()
+    closerScene:add(RT.Sphere.new(Vec3.new(0, 0, -4), 1))
+    closerScene:buildBVH()
+    closerScene:add(RT.Sphere.new(Vec3.new(0, 0, -1), 0.25))
+    local invalidatedHit = closerScene:hit(
+        Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1)),
+        interval
+    )
+    assertNear(invalidatedHit.t, 0.75, 1e-8, "Scene add should invalidate BVH")
+
+    closerScene:clear()
+    assert(closerScene:getAccelerator() == nil, "Scene clear should invalidate BVH")
+    assert(
+        closerScene:hit(Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1)), interval) == nil,
+        "cleared Scene should miss"
+    )
 end
 
 local function testLightingAndTextures()

@@ -146,6 +146,15 @@ local function buildScene()
         Vec3.new(2.15, 3.35, 1.75),
         texturedWhite
     )
+    local bvh = scene_:buildBVH()
+    local bvhStats = bvh:getStats()
+    print(string.format(
+        "[RayTracer] BVH: %d objects, %d nodes, %d leaves, depth %d",
+        #scene_.objects,
+        bvhStats.nodeCount,
+        bvhStats.leafCount,
+        bvhStats.maxDepth
+    ))
 
     camera_ = RayTracer.Camera.new {
         aspectRatio = CONFIG.width / CONFIG.height,
@@ -388,6 +397,15 @@ function HandleUpdate(eventType, eventData)
         statusLabel:SetText("渲染完成 · Cornell Box")
         progressBar:SetValue(1)
         reportedComplete_ = true
+        local accelerator = scene_ and scene_:getAccelerator()
+        if accelerator then
+            local stats = accelerator:getStats()
+            print(string.format(
+                "[RayTracer] BVH traversal: %d box tests, %d primitive tests",
+                stats.boxTests,
+                stats.primitiveTests
+            ))
+        end
         print("[RayTracer] render complete")
     end
 end
