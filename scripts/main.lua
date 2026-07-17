@@ -1,36 +1,31 @@
 local RayTracer = require "RayTracer"
+local UI = require("urhox-libs/UI")
 
 local CONFIG = {
     title = "CPU Ray Tracer · 第一轮法线图",
     width = 64,
     height = 36,
     samplesPerPixel = 1,
-    maxPixelsPerStep = 128,
+    maxPixelsPerStep = 32,
 }
 
+---@type table|nil
 local camera_ = nil
+---@type table|nil
 local scene_ = nil
+---@type table|nil
 local renderer_ = nil
+---@type table|nil
 local frame_ = nil
+---@type NVGContextWrapper|nil
 local vg_ = nil
-local logicalW_ = 0
-local logicalH_ = 0
-local dpr_ = 1
-local fontId_ = -1
-local hasFont_ = false
-local statusText_ = "初始化中"
-local lastProgress_ = -1
-
-local function updateViewportSize()
-    local physicalW = graphics:GetWidth()
-    local physicalH = graphics:GetHeight()
-    dpr_ = graphics:GetDPR()
-    if dpr_ <= 0 then
-        dpr_ = 1
-    end
-    logicalW_ = physicalW / dpr_
-    logicalH_ = physicalH / dpr_
-end
+---@type Label|nil
+local statusLabel_ = nil
+---@type ProgressBar|nil
+local progressBar_ = nil
+---@type Panel|nil
+local uiRoot_ = nil
+local reportedComplete_ = false
 
 local function buildScene()
     local Vec3 = RayTracer.Vec3
@@ -59,7 +54,95 @@ local function buildRenderer()
         seed = 42,
         integrator = RayTracer.NormalIntegrator.new(),
     }
-    statusText_ = "开始渲染"
+end
+
+local function buildUI()
+    UI.Init {
+        theme = "default-dark",
+        fonts = {
+            { name = "sans", path = "Fonts/NotoSansSC-Black.ttf" },
+        },
+        scale = UI.Scale.DEFAULT,
+    }
+
+    statusLabel_ = UI.Label {
+        id = "render-status",
+        position = "absolute",
+        left = 0,
+        width = "100%",
+        bottom = 54,
+        height = 28,
+        text = "初始化中",
+        fontSize = 14,
+        fontColor = { 206, 224, 244, 255 },
+        textAlign = "center",
+        verticalAlign = "middle",
+        textStroke = { width = 2, color = { 8, 12, 20, 255 } },
+    }
+
+    progressBar_ = UI.ProgressBar {
+        id = "render-progress",
+        position = "absolute",
+        left = 24,
+        width = "94%",
+        bottom = 34,
+        height = 10,
+        value = 0,
+        max = 1,
+        fillGradient = {
+            direction = "to-right",
+            from = { 80, 190, 255, 255 },
+            to = { 90, 230, 160, 255 },
+        },
+        backgroundColor = { 22, 32, 48, 240 },
+        borderColor = { 100, 145, 180, 255 },
+        borderWidth = 1,
+        borderRadius = 5,
+    }
+
+    local titleLabel = UI.Label {
+        id = "title",
+        position = "absolute",
+        left = 0,
+        width = "100%",
+        top = 10,
+        height = 32,
+        text = CONFIG.title,
+        fontSize = 18,
+        fontColor = { 235, 242, 255, 255 },
+        textAlign = "center",
+        verticalAlign = "middle",
+        textStroke = { width = 2, color = { 8, 12, 20, 255 } },
+    }
+
+    local footerLabel = UI.Label {
+        id = "footer",
+        position = "absolute",
+        left = 0,
+        width = "100%",
+        bottom = 8,
+        height = 18,
+        text = "纯 Lua 5.4 · CPU-only · 无图形 API 参与计算",
+        fontSize = 10,
+        fontColor = { 138, 169, 202, 255 },
+        textAlign = "center",
+        verticalAlign = "middle",
+        textStroke = { width = 1, color = { 8, 12, 20, 255 } },
+    }
+
+    uiRoot_ = UI.Panel {
+        width = "100%",
+        height = "100%",
+        position = "relative",
+        pointerEvents = "box-none",
+        children = {
+            titleLabel,
+            statusLabel_,
+            progressBar_,
+            footerLabel,
+        },
+    }
+    UI.SetRoot(uiRoot_)
 end
 
 local function colorToRgba(r, g, b)
@@ -87,21 +170,9 @@ local function drawPixelImage(ctx, left, top, width, height)
     end
 end
 
-local function drawText(ctx, x, y, size, text, color, align)
-    if not hasFont_ then
-        return
-    end
-    nvgFontFaceId(ctx, fontId_)
-    nvgFontSize(ctx, size)
-    nvgTextAlign(ctx, align or NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
-    nvgFillColor(ctx, color)
-    nvgText(ctx, x, y, text, nil)
-end
-
 function Start()
     graphics.windowTitle = CONFIG.title
     input.mouseMode = MM_ABSOLUTE
-    updateViewportSize()
 
     vg_ = nvgCreate(1)
     if vg_ == nil then
@@ -109,77 +180,85 @@ function Start()
         return
     end
 
-    fontId_ = nvgCreateFont(vg_, "sans", "Fonts/NotoSansSC-Black.ttf")
-    if fontId_ == -1 then
-        print("[RayTracer] WARNING: Font unavailable; continuing without text overlay")
-        hasFont_ = false
-    else
-        hasFont_ = true
-    end
-
+    buildUI()
     buildScene()
     buildRenderer()
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent(vg_, "NanoVGRender", "HandleRender")
     SubscribeToEvent("ScreenMode", "HandleScreenMode")
-    print(string.format("[RayTracer] started: %dx%d, DPR %.2f", CONFIG.width, CONFIG.height, dpr_))
+    print(string.format("[RayTracer] started: %dx%d", CONFIG.width, CONFIG.height))
 end
 
 ---@param eventType string
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
-    if renderer_ == nil then
+    local renderer = renderer_
+    local statusLabel = statusLabel_
+    local progressBar = progressBar_
+    if renderer == nil or statusLabel == nil or progressBar == nil then
         return
     end
 
-    if not renderer_:isComplete() then
-        renderer_:step(CONFIG.maxPixelsPerStep)
-        frame_ = renderer_.film
-        local progress = renderer_:progress()
-        if progress ~= lastProgress_ then
-            lastProgress_ = progress
-            statusText_ = string.format("渲染中 %.1f%%", progress * 100)
-        end
-    else
-        statusText_ = "渲染完成 · 法线积分器"
+    if not renderer:isComplete() then
+        renderer:step(CONFIG.maxPixelsPerStep)
+        frame_ = renderer.film
+        local progress = renderer:progress()
+        statusLabel:SetText(string.format("渲染中 %.1f%%", progress * 100))
+        progressBar:SetValue(progress)
+    elseif not reportedComplete_ then
+        statusLabel:SetText("渲染完成 · 法线积分器")
+        progressBar:SetValue(1)
+        reportedComplete_ = true
+        print("[RayTracer] render complete")
     end
 end
 
 ---@param eventType string
 ---@param eventData ScreenModeEventData
 function HandleScreenMode(eventType, eventData)
-    updateViewportSize()
+    UI.MarkLayoutDirty()
 end
 
 ---@param eventType string
 ---@param eventData NanoVGRenderEventData
 function HandleRender(eventType, eventData)
-    if vg_ == nil then
+    local vg = vg_
+    if vg == nil then
         return
     end
 
-    updateViewportSize()
-    nvgBeginFrame(vg_, logicalW_, logicalH_, dpr_)
+    local physicalW = graphics:GetWidth()
+    local physicalH = graphics:GetHeight()
+    local dpr = graphics:GetDPR()
+    if dpr <= 0 then
+        dpr = 1
+    end
+    local logicalW = physicalW / dpr
+    local logicalH = physicalH / dpr
 
-    nvgBeginPath(vg_)
-    nvgRect(vg_, 0, 0, logicalW_, logicalH_)
-    nvgFillColor(vg_, nvgRGBA(8, 12, 20, 255))
-    nvgFill(vg_)
+    nvgBeginFrame(vg, logicalW, logicalH, dpr)
 
-    local imageWidth = math.min(logicalW_ - 48, logicalH_ * 1.65)
+    nvgBeginPath(vg)
+    nvgRect(vg, 0, 0, logicalW, logicalH)
+    nvgFillColor(vg, nvgRGBA(8, 12, 20, 255))
+    nvgFill(vg)
+
+    local imageWidth = math.min(logicalW - 48, logicalH * 1.65)
     local imageHeight = imageWidth * CONFIG.height / CONFIG.width
-    local imageLeft = (logicalW_ - imageWidth) * 0.5
-    local imageTop = math.max(56, (logicalH_ - imageHeight) * 0.5)
-    drawPixelImage(vg_, imageLeft, imageTop, imageWidth, imageHeight)
+    local imageLeft = (logicalW - imageWidth) * 0.5
+    local imageTop = math.max(56, (logicalH - imageHeight) * 0.5)
+    drawPixelImage(vg, imageLeft, imageTop, imageWidth, imageHeight)
 
-    drawText(vg_, logicalW_ * 0.5, 18, 18, CONFIG.title, nvgRGBA(235, 242, 255, 255), NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-    drawText(vg_, logicalW_ * 0.5, imageTop + imageHeight + 14, 13, statusText_, nvgRGBA(166, 190, 215, 255), NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-    drawText(vg_, 16, logicalH_ - 20, 11, "纯 Lua 5.4 · CPU-only · 无图形 API 参与计算", nvgRGBA(112, 145, 175, 255), NVG_ALIGN_LEFT + NVG_ALIGN_BASELINE)
-
-    nvgEndFrame(vg_)
+    nvgEndFrame(vg)
 end
 
 function Stop()
+    if UI.GetRoot() ~= nil then
+        UI.Shutdown()
+        uiRoot_ = nil
+        statusLabel_ = nil
+        progressBar_ = nil
+    end
     if vg_ ~= nil then
         nvgDelete(vg_)
         vg_ = nil
