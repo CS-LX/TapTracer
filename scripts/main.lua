@@ -2,10 +2,10 @@ local RayTracer = require "RayTracer"
 local UI = require("urhox-libs/UI")
 
 local CONFIG = {
-    title = "CPU Ray Tracer · 第二轮材质球",
+    title = "CPU Ray Tracer · Cornell Box",
     width = 128,
     height = 72,
-    samplesPerPixel = 8,
+    samplesPerPixel = 16,
     maxTilesPerStep = 2,
     maxDepth = 8,
     denoise = false,
@@ -31,42 +31,123 @@ local progressBar_ = nil
 local uiRoot_ = nil
 local reportedComplete_ = false
 
+local function addBox(scene, minimum, maximum, material)
+    local Vec3 = RayTracer.Vec3
+    local minX = minimum.x
+    local minY = minimum.y
+    local minZ = minimum.z
+    local maxX = maximum.x
+    local maxY = maximum.y
+    local maxZ = maximum.z
+
+    scene:add(RayTracer.Quad.new(
+        Vec3.new(minX, minY, minZ),
+        Vec3.new(maxX - minX, 0, 0),
+        Vec3.new(0, maxY - minY, 0),
+        material
+    ))
+    scene:add(RayTracer.Quad.new(
+        Vec3.new(minX, minY, maxZ),
+        Vec3.new(maxX - minX, 0, 0),
+        Vec3.new(0, maxY - minY, 0),
+        material
+    ))
+    scene:add(RayTracer.Quad.new(
+        Vec3.new(minX, minY, minZ),
+        Vec3.new(0, maxY - minY, 0),
+        Vec3.new(0, 0, maxZ - minZ),
+        material
+    ))
+    scene:add(RayTracer.Quad.new(
+        Vec3.new(maxX, minY, maxZ),
+        Vec3.new(0, maxY - minY, 0),
+        Vec3.new(0, 0, minZ - maxZ),
+        material
+    ))
+    scene:add(RayTracer.Quad.new(
+        Vec3.new(minX, minY, minZ),
+        Vec3.new(0, 0, maxZ - minZ),
+        Vec3.new(maxX - minX, 0, 0),
+        material
+    ))
+    scene:add(RayTracer.Quad.new(
+        Vec3.new(minX, maxY, minZ),
+        Vec3.new(maxX - minX, 0, 0),
+        Vec3.new(0, 0, maxZ - minZ),
+        material
+    ))
+end
+
 local function buildScene()
     local Vec3 = RayTracer.Vec3
-    local red = RayTracer.Lambertian.new(Vec3.new(0.75, 0.18, 0.15))
-    local checker = RayTracer.Checker.new(
-        0.55,
-        RayTracer.SolidColor.new(Vec3.new(0.08, 0.18, 0.55)),
-        RayTracer.SolidColor.new(Vec3.new(0.16, 0.42, 0.82))
-    )
-    local blue = RayTracer.Lambertian.new(checker)
-    local metal = RayTracer.Metal.new(Vec3.new(0.82, 0.84, 0.88), 0.12)
-    local glass = RayTracer.Dielectric.new(1.5)
+    local red = RayTracer.Lambertian.new(Vec3.new(0.65, 0.05, 0.05))
+    local green = RayTracer.Lambertian.new(Vec3.new(0.12, 0.45, 0.15))
+    local white = RayTracer.Lambertian.new(Vec3.new(0.73, 0.73, 0.73))
     local light = RayTracer.DiffuseLight.new(
-        RayTracer.SolidColor.new(Vec3.new(1.0, 0.72, 0.42)),
-        5.0
+        RayTracer.SolidColor.new(Vec3.new(1.0, 1.0, 1.0)),
+        8.0
     )
 
     scene_ = RayTracer.Scene.new()
-    scene_:add(RayTracer.Sphere.new(Vec3.new(0, 0, -1.1), 0.5, red))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(-1.05, 0, -1.4), 0.5, glass))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(1.05, 0, -1.25), 0.5, metal))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(0, -100.5, -1), 100, blue))
+
+    -- Cornell Box: camera faces +Z toward the back wall at z = 4.
     scene_:add(RayTracer.Quad.new(
-        Vec3.new(-0.75, 0.35, -2.25),
-        Vec3.new(1.5, 0, 0),
-        Vec3.new(0, 1.1, 0),
+        Vec3.new(-3, 0, 4),
+        Vec3.new(6, 0, 0),
+        Vec3.new(0, 5, 0),
+        white
+    ))
+    scene_:add(RayTracer.Quad.new(
+        Vec3.new(-3, 0, -1),
+        Vec3.new(0, 0, 5),
+        Vec3.new(6, 0, 0),
+        white
+    ))
+    scene_:add(RayTracer.Quad.new(
+        Vec3.new(-3, 5, -1),
+        Vec3.new(6, 0, 0),
+        Vec3.new(0, 0, 5),
+        white
+    ))
+    scene_:add(RayTracer.Quad.new(
+        Vec3.new(-3, 0, -1),
+        Vec3.new(0, 5, 0),
+        Vec3.new(0, 0, 5),
+        red
+    ))
+    scene_:add(RayTracer.Quad.new(
+        Vec3.new(3, 0, 4),
+        Vec3.new(0, 0, -5),
+        Vec3.new(0, 5, 0),
+        green
+    ))
+    scene_:add(RayTracer.Quad.new(
+        Vec3.new(-1.0, 4.98, 1.0),
+        Vec3.new(2.0, 0, 0),
+        Vec3.new(0, 0, 1.5),
         light
     ))
+    addBox(
+        scene_,
+        Vec3.new(-2.15, 0, 1.2),
+        Vec3.new(-0.45, 2.15, 2.55),
+        white
+    )
+    addBox(
+        scene_,
+        Vec3.new(0.35, 0, 0.15),
+        Vec3.new(2.15, 3.35, 1.75),
+        white
+    )
 
     camera_ = RayTracer.Camera.new {
         aspectRatio = CONFIG.width / CONFIG.height,
         imageWidth = CONFIG.width,
-        verticalFov = 35,
-        lookFrom = Vec3.new(3.2, 1.6, 4.2),
-        lookAt = Vec3.new(0, 0, -1),
+        verticalFov = 40,
+        lookFrom = Vec3.new(0, 2.5, -6.5),
+        lookAt = Vec3.new(0, 2.5, 1.5),
         up = Vec3.new(0, 1, 0),
-        defocusAngle = 0.6,
+        defocusAngle = 0,
     }
 end
 
@@ -82,7 +163,7 @@ local function buildRenderer()
         seed = 42,
         integrator = RayTracer.PathIntegrator.new {
             maxDepth = CONFIG.maxDepth,
-            background = RayTracer.Vec3.new(0.5, 0.7, 1.0),
+            background = RayTracer.Vec3.new(0, 0, 0),
         },
     }
 end
@@ -103,7 +184,7 @@ local function buildUI()
         width = "100%",
         bottom = 54,
         height = 36,
-        text = "初始化中 · 材质球场景",
+        text = "初始化中 · Cornell Box",
         fontSize = 14,
         fontColor = { 206, 224, 244, 255 },
         textAlign = "center",
@@ -297,7 +378,7 @@ function HandleUpdate(eventType, eventData)
         statusLabel:SetText(string.format("渲染中 %.1f%%", progress * 100))
         progressBar:SetValue(progress)
     elseif not reportedComplete_ then
-        statusLabel:SetText("渲染完成 · Lambertian / Metal / Dielectric")
+        statusLabel:SetText("渲染完成 · Cornell Box")
         progressBar:SetValue(1)
         reportedComplete_ = true
         print("[RayTracer] render complete")

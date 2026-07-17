@@ -406,6 +406,46 @@ local function testQuadAndRussianRoulette()
     assert(not terminated, "roulette termination")
 end
 
+local function testCornellBoxSceneGeometry()
+    local white = RT.Lambertian.new(Vec3.new(0.73, 0.73, 0.73))
+    local red = RT.Lambertian.new(Vec3.new(0.65, 0.05, 0.05))
+    local green = RT.Lambertian.new(Vec3.new(0.12, 0.45, 0.15))
+    local light = RT.DiffuseLight.new(
+        RT.SolidColor.new(Vec3.new(1, 1, 1)),
+        8
+    )
+    local scene = RT.Scene.new()
+
+    scene:add(RT.Quad.new(
+        Vec3.new(-3, 0, 4), Vec3.new(6, 0, 0), Vec3.new(0, 5, 0), white
+    ))
+    scene:add(RT.Quad.new(
+        Vec3.new(-3, 0, -1), Vec3.new(0, 0, 5), Vec3.new(6, 0, 0), white
+    ))
+    scene:add(RT.Quad.new(
+        Vec3.new(-3, 5, -1), Vec3.new(6, 0, 0), Vec3.new(0, 0, 5), white
+    ))
+    scene:add(RT.Quad.new(
+        Vec3.new(-3, 0, -1), Vec3.new(0, 5, 0), Vec3.new(0, 0, 5), red
+    ))
+    scene:add(RT.Quad.new(
+        Vec3.new(3, 0, 4), Vec3.new(0, 0, -5), Vec3.new(0, 5, 0), green
+    ))
+    scene:add(RT.Quad.new(
+        Vec3.new(-1, 4.98, 1), Vec3.new(2, 0, 0), Vec3.new(0, 0, 1.5), light
+    ))
+
+    assertNear(#scene.objects, 6, 0, "Cornell Box room primitive count")
+    assertNear(#scene.lights, 1, 0, "Cornell Box light count")
+    local box = scene:boundingBox()
+    assertNear(box.minimum.x, -3, 1e-3, "Cornell Box bounds min x")
+    assertNear(box.minimum.y, 0, 1e-3, "Cornell Box bounds min y")
+    assertNear(box.minimum.z, -1, 1e-3, "Cornell Box bounds min z")
+    assertNear(box.maximum.x, 3, 1e-3, "Cornell Box bounds max x")
+    assertNear(box.maximum.y, 5, 1e-3, "Cornell Box bounds max y")
+    assertNear(box.maximum.z, 4, 1e-3, "Cornell Box bounds max z")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -435,6 +475,7 @@ testPathIntegrator()
 testAcceleration()
 testLightingAndTextures()
 testQuadAndRussianRoulette()
+testCornellBoxSceneGeometry()
 testPhaseCRenderer()
 testPresenters()
 testOutput()
