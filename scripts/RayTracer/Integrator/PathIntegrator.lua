@@ -1,6 +1,7 @@
 local Vec3 = require "RayTracer.Math.Vec3"
 local Ray = require "RayTracer.Math.Ray"
 local Interval = require "RayTracer.Math.Interval"
+local RussianRoulette = require "RayTracer.Integrator.RussianRoulette"
 
 ---@class PathIntegratorVec3
 ---@field x number
@@ -11,7 +12,7 @@ local Interval = require "RayTracer.Math.Interval"
 ---@field maxDepth number
 local function sampleDirectLight(scene, record, material, rng)
     local lights = scene.lights
-    if lights == nil or #lights == 0 or material.albedoAt == nil then
+    if lights == nil or #lights == 0 or material == nil or material.albedoAt == nil then
         return Vec3.new(0, 0, 0)
     end
 
@@ -59,9 +60,14 @@ PathIntegrator.__index = PathIntegrator
 ---@return PathIntegrator
 function PathIntegrator.new(options)
     options = options or {}
+    local roulette = nil
+    if options.roulette ~= false then
+        roulette = RussianRoulette.new(options.roulette)
+    end
     return setmetatable({
         background = options.background,
         maxDepth = options.maxDepth or 8,
+        roulette = roulette,
     }, PathIntegrator)
 end
 
@@ -82,7 +88,7 @@ function PathIntegrator:trace(ray, scene, rng)
     local radianceB = 0.0
     local previousSpecular = true
 
-    for _ = 1, maxDepth do
+    for depth = 1, maxDepth do
         local record = scene:hit(currentRay, Interval.new(0.001, math.huge))
         if record == nil then
             local unitDirection = currentRay.direction:unit()
@@ -131,6 +137,18 @@ function PathIntegrator:trace(ray, scene, rng)
         attenuationR = attenuationR * albedoR
         attenuationG = attenuationG * albedoG
         attenuationB = attenuationB * albedoB
+
+        if integrator.roulette then
+            local attenuation = Vec3.new(attenuationR, attenuationG, attenuationB)
+            local adjusted, survived = integrator.roulette:continuePath(depth, attenuation, rng)
+            if not survived then
+                return Vec3.new(radianceR, radianceG, radianceB)
+            end
+            attenuationR = adjusted.x
+            attenuationG = adjusted.y
+            attenuationB = adjusted.z
+        end
+
         currentRay = scattered
         previousSpecular = isSpecular == true
     end

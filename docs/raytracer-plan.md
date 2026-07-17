@@ -229,7 +229,9 @@ job:GetStats()
 ## 7. 数据与数学约定
 
 - 颜色在计算过程中使用线性 RGB 浮点数；
-- 输出前执行样本平均、非负截断、色调映射和 Gamma 2.0/2.2 编码；
+- `Film` 保存样本平均后的线性 HDR RGB，是渲染结果的原始数据源，允许分量小于 0 或大于 1，不因预览显示而覆盖；
+- 当前 NanoVG 预览仅在量化边界执行非负截断与 `[0, 1]` Clamp，再转换为 8-bit RGB；Clamp 后的颜色只用于显示，不写回 `Film`；
+- 后续显示质量优化统一放在独立输出转换层：固定曝光、连续亮度色调映射、可选高光趋白、Linear RGB 到 sRGB 编码，并由 NanoVG、PPM、ANSI 等 Presenter 共享；
 - 射线有效区间使用 `tMin`/`tMax`，以 epsilon 避免自相交；
 - `HitRecord:SetFaceNormal(ray, outwardNormal)` 统一维护正面标志与朝向射线的法线；
 - 所有方向向量在要求单位长度的边界处显式归一化；
@@ -333,6 +335,7 @@ job:GetStats()
 - 显式光源采样；
 - 阴影射线；
 - Russian Roulette；
+- 当前阶段保留线性 HDR `Film`，预览端暂用直接 Clamp；统一曝光、色调映射与 sRGB 输出标记为后续质量优化；
 - 下一步再评估 MIS，不在第一版预埋复杂抽象。
 
 验收：

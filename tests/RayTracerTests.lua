@@ -365,6 +365,47 @@ local function testLightingAndTextures()
     assert(color.x >= 0 and color.y >= 0 and color.z >= 0, "direct lighting color")
 end
 
+local function testQuadAndRussianRoulette()
+    local quad = RT.Quad.new(
+        Vec3.new(-1, -1, -2),
+        Vec3.new(2, 0, 0),
+        Vec3.new(0, 2, 0),
+        RT.Lambertian.new(Vec3.new(0.5, 0.5, 0.5))
+    )
+    local hit = quad:hit(
+        Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1)),
+        Interval.new(0.001, math.huge)
+    )
+    assert(hit ~= nil, "center ray should hit quad")
+    assertNear(hit.t, 2, 1e-8, "quad hit distance")
+    assertNear(hit.u, 0.5, 1e-8, "quad u")
+    assertNear(hit.v, 0.5, 1e-8, "quad v")
+    assert(quad:hit(Ray.new(Vec3.new(2, 0, 0), Vec3.new(0, 0, -1)), Interval.new(0.001, math.huge)) == nil, "ray should miss quad")
+
+    local point, normal, pdf = quad:sampleSurface(RT.RNG.new(5))
+    assertNear(point.z, -2, 1e-8, "quad sample plane")
+    assertNear(normal:length(), 1, 1e-8, "quad sample normal")
+    assertNear(pdf, 0.25, 1e-8, "quad area pdf")
+
+    local roulette = RT.RussianRoulette.new {
+        minimumDepth = 3,
+        survivalProbability = 0.5,
+    }
+    local attenuation = Vec3.new(0.4, 0.3, 0.2)
+    local beforeMinimum, continued = roulette:continuePath(2, attenuation, RT.RNG.new(1))
+    assert(continued, "roulette should continue before minimum depth")
+    assertVectorNear(beforeMinimum, attenuation, 1e-8, "roulette pre-minimum attenuation")
+
+    local survivalRng = { nextFloat = function() return 0.25 end }
+    local survived, didSurvive = roulette:continuePath(3, attenuation, survivalRng)
+    assert(didSurvive, "roulette survival")
+    assertVectorNear(survived, attenuation / 0.5, 1e-8, "roulette unbiased weight")
+
+    local terminationRng = { nextFloat = function() return 0.75 end }
+    local _, terminated = roulette:continuePath(3, attenuation, terminationRng)
+    assert(not terminated, "roulette termination")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -393,6 +434,7 @@ testMaterials()
 testPathIntegrator()
 testAcceleration()
 testLightingAndTextures()
+testQuadAndRussianRoulette()
 testPhaseCRenderer()
 testPresenters()
 testOutput()

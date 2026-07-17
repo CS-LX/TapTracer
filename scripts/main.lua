@@ -5,10 +5,12 @@ local CONFIG = {
     title = "CPU Ray Tracer · 第二轮材质球",
     width = 128,
     height = 72,
-    samplesPerPixel = 4,
+    samplesPerPixel = 8,
     maxTilesPerStep = 2,
     maxDepth = 8,
     denoise = false,
+    rawDisplayWidth = 112,
+    denoisedDisplayWidth = 96,
 }
 
 ---@type table|nil
@@ -50,7 +52,12 @@ local function buildScene()
     scene_:add(RayTracer.Sphere.new(Vec3.new(-1.05, 0, -1.4), 0.5, glass))
     scene_:add(RayTracer.Sphere.new(Vec3.new(1.05, 0, -1.25), 0.5, metal))
     scene_:add(RayTracer.Sphere.new(Vec3.new(0, -100.5, -1), 100, blue))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(0, 2.8, -1), 0.65, light))
+    scene_:add(RayTracer.Quad.new(
+        Vec3.new(-0.75, 0.35, -2.25),
+        Vec3.new(1.5, 0, 0),
+        Vec3.new(0, 1.1, 0),
+        light
+    ))
 
     camera_ = RayTracer.Camera.new {
         aspectRatio = CONFIG.width / CONFIG.height,
@@ -170,14 +177,17 @@ local function buildUI()
 end
 
 local function colorToRgba(r, g, b)
-    local red = math.floor(math.max(0, math.min(1, r)) * 255)
-    local green = math.floor(math.max(0, math.min(1, g)) * 255)
-    local blue = math.floor(math.max(0, math.min(1, b)) * 255)
-    return nvgRGBA(red, green, blue, 255)
+    local function encode(value)
+        return math.floor(
+            math.max(0, math.min(1, value)) * 255
+        )
+    end
+
+    return nvgRGBA(encode(r), encode(g), encode(b), 255)
 end
 
 local function drawRawPixelImage(ctx, left, top, width, height)
-    local displayWidth = math.min(frame_.width, 96)
+    local displayWidth = math.min(frame_.width, CONFIG.rawDisplayWidth)
     local displayHeight = math.floor(displayWidth * frame_.height / frame_.width)
     local cellW = width / displayWidth
     local cellH = height / displayHeight
@@ -211,7 +221,7 @@ local function drawPixelImage(ctx, left, top, width, height)
         return
     end
 
-    local displayWidth = math.min(frame_.width, 96)
+    local displayWidth = math.min(frame_.width, CONFIG.denoisedDisplayWidth)
     local displayHeight = math.floor(displayWidth * frame_.height / frame_.width)
     local cellW = width / displayWidth
     local cellH = height / displayHeight
