@@ -6,6 +6,7 @@ local PRESETS = {
         height = 144,
         samplesPerPixel = 32,
         progressiveChunkWidth = 64,
+        progressiveChunkHeight = 4,
         maxTilesPerStep = 1,
     },
     ["quality-square"] = {
@@ -13,6 +14,7 @@ local PRESETS = {
         height = 256,
         samplesPerPixel = 64,
         progressiveChunkWidth = 64,
+        progressiveChunkHeight = 4,
         maxTilesPerStep = 1,
     },
     offline = {
@@ -20,6 +22,7 @@ local PRESETS = {
         height = 512,
         samplesPerPixel = 64,
         progressiveChunkWidth = 64,
+        progressiveChunkHeight = 4,
         maxTilesPerStep = 1,
     },
 }

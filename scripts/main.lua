@@ -12,6 +12,7 @@ local CONFIG = {
     height = ACTIVE_PRESET.height,
     samplesPerPixel = ACTIVE_PRESET.samplesPerPixel,
     progressiveChunkWidth = ACTIVE_PRESET.progressiveChunkWidth,
+    progressiveChunkHeight = ACTIVE_PRESET.progressiveChunkHeight,
     maxTilesPerStep = ACTIVE_PRESET.maxTilesPerStep,
     maxDepth = 8,
     denoise = false,
@@ -42,6 +43,7 @@ local displayCanvas_ = nil
 local displayedPixels_ = 0
 local displayUploadSeconds_ = 0
 local displayUploadCount_ = 0
+local pendingDisplayUpload_ = false
 local reportedComplete_ = false
 
 local function addBox(scene, minimum, maximum, material)
@@ -194,7 +196,7 @@ local function buildRenderer()
         maxDepth = CONFIG.maxDepth,
         tileSize = 8,
         tileWidth = CONFIG.progressiveChunkWidth,
-        tileHeight = 1,
+        tileHeight = CONFIG.progressiveChunkHeight,
         seed = 42,
         timeProvider = function()
             return GetTime():GetElapsedTime()
@@ -229,6 +231,7 @@ local function buildDisplayTexture()
     displayedPixels_ = 0
     displayUploadSeconds_ = 0
     displayUploadCount_ = 0
+    pendingDisplayUpload_ = false
     print(string.format(
         "[RayTracer] live display texture ready: %dx%d",
         CONFIG.width,
@@ -236,11 +239,25 @@ local function buildDisplayTexture()
     ))
 end
 
+local function uploadDisplayTexture()
+    local texture = displayTexture_
+    local image = displayImage_
+    if texture == nil or image == nil then
+        return
+    end
+
+    local uploadStart = GetTime():GetElapsedTime()
+    texture:SetData(image, false)
+    pendingDisplayUpload_ = false
+    displayUploadSeconds_ = displayUploadSeconds_
+        + math.max(0, GetTime():GetElapsedTime() - uploadStart)
+    displayUploadCount_ = displayUploadCount_ + 1
+end
+
 local function updateDisplayTile(tile)
     local image = displayImage_
-    local texture = displayTexture_
     local frame = frame_
-    if image == nil or texture == nil or frame == nil or tile == nil then
+    if image == nil or frame == nil or tile == nil then
         return
     end
 
@@ -256,11 +273,7 @@ local function updateDisplayTile(tile)
         end
     end
 
-    local uploadStart = GetTime():GetElapsedTime()
-    texture:SetData(image, false)
-    displayUploadSeconds_ = displayUploadSeconds_
-        + math.max(0, GetTime():GetElapsedTime() - uploadStart)
-    displayUploadCount_ = displayUploadCount_ + 1
+    pendingDisplayUpload_ = true
 end
 
 local function layoutDisplayCanvas()
@@ -452,6 +465,9 @@ function HandleUpdate(eventType, eventData)
         local progress = stats.progress
         local tile = renderer.lastTile
         updateDisplayTile(tile)
+        if pendingDisplayUpload_ then
+            uploadDisplayTexture()
+        end
         local pass = math.min(CONFIG.samplesPerPixel, stats.currentPass)
         local passProgress = stats.completedPassPixels / stats.totalPixels
         statusLabel:SetText(string.format(
@@ -465,6 +481,9 @@ function HandleUpdate(eventType, eventData)
     elseif not reportedComplete_ then
         frame_ = renderer.film
         updateDisplayTile(renderer.lastTile)
+        if pendingDisplayUpload_ then
+            uploadDisplayTexture()
+        end
         statusLabel:SetText("渲染完成 · Poolcore Courtyard")
         progressBar:SetValue(1)
         reportedComplete_ = true
