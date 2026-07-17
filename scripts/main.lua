@@ -8,6 +8,7 @@ local CONFIG = {
     samplesPerPixel = 4,
     maxTilesPerStep = 2,
     maxDepth = 8,
+    denoise = false,
 }
 
 ---@type table|nil
@@ -165,8 +166,38 @@ local function colorToRgba(r, g, b)
     return nvgRGBA(red, green, blue, 255)
 end
 
+local function drawRawPixelImage(ctx, left, top, width, height)
+    local displayWidth = math.min(frame_.width, 96)
+    local displayHeight = math.floor(displayWidth * frame_.height / frame_.width)
+    local cellW = width / displayWidth
+    local cellH = height / displayHeight
+
+    for y = 0, displayHeight - 1 do
+        local sourceY = math.min(
+            frame_.height - 1,
+            math.floor(y * frame_.height / displayHeight)
+        )
+        for x = 0, displayWidth - 1 do
+            local sourceX = math.min(
+                frame_.width - 1,
+                math.floor(x * frame_.width / displayWidth)
+            )
+            local r, g, b = frame_:get(sourceX, sourceY)
+            nvgBeginPath(ctx)
+            nvgRect(ctx, left + x * cellW, top + y * cellH, cellW + 0.5, cellH + 0.5)
+            nvgFillColor(ctx, colorToRgba(r, g, b))
+            nvgFill(ctx)
+        end
+    end
+end
+
 local function drawPixelImage(ctx, left, top, width, height)
     if frame_ == nil then
+        return
+    end
+
+    if not CONFIG.denoise then
+        drawRawPixelImage(ctx, left, top, width, height)
         return
     end
 

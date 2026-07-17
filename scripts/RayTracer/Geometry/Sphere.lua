@@ -53,7 +53,8 @@ end
 function Sphere:boundingBox()
     local radius = self.radius
     local delta = Vec3.new(radius, radius, radius)
-    return self.center - delta, self.center + delta
+    local AABB = require "RayTracer.Acceleration.AABB"
+    return AABB.new(self.center - delta, self.center + delta)
 end
 
 return Sphere

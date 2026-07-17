@@ -272,6 +272,62 @@ local function testPathIntegrator()
     assert(color.x >= 0 and color.y >= 0 and color.z >= 0, "Path color must be non-negative")
 end
 
+local function testAcceleration()
+    local unitBox = RT.AABB.new(Vec3.new(-1, -1, -1), Vec3.new(1, 1, 1))
+    local interval = Interval.new(0.001, math.huge)
+    assert(unitBox:hit(Ray.new(Vec3.new(0, 0, -3), Vec3.new(0, 0, 1)), interval), "AABB front hit")
+    assert(unitBox:hit(Ray.new(Vec3.new(0, 0, 0), Vec3.new(1, 0, 0)), interval), "AABB inside hit")
+    assert(unitBox:hit(Ray.new(Vec3.new(0, 0, -3), Vec3.new(0, 0, 1)), interval), "AABB parallel in slab")
+    assert(not unitBox:hit(Ray.new(Vec3.new(2, 0, -3), Vec3.new(0, 0, 1)), interval), "AABB parallel outside slab")
+
+    local triangle = RT.Triangle.new(
+        Vec3.new(-1, -1, -2),
+        Vec3.new(1, -1, -2),
+        Vec3.new(0, 1, -2)
+    )
+    local triangleHit = triangle:hit(
+        Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1)),
+        interval
+    )
+    assert(triangleHit ~= nil, "center ray should hit triangle")
+    assertNear(triangleHit.t, 2, 1e-8, "triangle distance")
+    assert(triangleHit.u >= 0 and triangleHit.v >= 0 and triangleHit.u + triangleHit.v <= 1, "triangle barycentric coordinates")
+    assert(triangle:hit(Ray.new(Vec3.new(2, 2, 0), Vec3.new(0, 0, -1)), interval) == nil, "ray should miss triangle")
+    assert(triangle:hit(Ray.new(Vec3.new(0, 0, -2), Vec3.new(1, 0, 0)), interval) == nil, "parallel ray should miss triangle")
+
+    local scene = RT.Scene.new()
+    for z = 1, 8 do
+        for x = 1, 8 do
+            scene:add(RT.Sphere.new(Vec3.new(x * 2, 0, z * 2), 0.45))
+        end
+    end
+    scene:add(triangle)
+    local bvh = scene:buildBVH()
+    local rays = {
+        Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1)),
+        Ray.new(Vec3.new(2, 0, 0), Vec3.new(0, 0, 1)),
+        Ray.new(Vec3.new(8, 0, 0), Vec3.new(0, 0, 1)),
+        Ray.new(Vec3.new(20, 5, 0), Vec3.new(0, 0, 1)),
+    }
+    for index = 1, #rays do
+        local bruteHit = scene:hit(rays[index], interval)
+        local bvhHit = bvh:hit(rays[index], interval)
+        assert((bruteHit == nil) == (bvhHit == nil), "BVH hit presence " .. index)
+        if bruteHit ~= nil then
+            assertNear(bvhHit.t, bruteHit.t, 1e-8, "BVH hit distance " .. index)
+            assertVectorNear(bvhHit.normal, bruteHit.normal, 1e-8, "BVH hit normal " .. index)
+        end
+    end
+
+    bvh:resetStats()
+    local measuredRay = Ray.new(Vec3.new(2, 0, 0), Vec3.new(0, 0, 1))
+    bvh:hit(measuredRay, interval)
+    local stats = bvh:getStats()
+    assert(stats.nodeCount > 1 and stats.leafCount > 1, "BVH build stats")
+    assert(stats.boxTests > 0, "BVH box tests")
+    assert(stats.primitiveTests < #scene.objects, "BVH should reduce primitive tests")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -298,6 +354,7 @@ testRayAndSphere()
 testDeterministicRng()
 testMaterials()
 testPathIntegrator()
+testAcceleration()
 testPhaseCRenderer()
 testPresenters()
 testOutput()

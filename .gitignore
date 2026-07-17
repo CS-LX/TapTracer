@@ -38,10 +38,7 @@ tools/
 urhox-libs/
 AGENTS.md
 CLAUDE.md
-
-# Local credentials
-secret/
-
-# Research-only reference repositories and generated previews
 references/
 screenshots/
+secret/
+

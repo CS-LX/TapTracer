@@ -31,4 +31,19 @@ function Scene:hit(ray, rayInterval)
     return closestRecord
 end
 
+function Scene:boundingBox()
+    assert(#self.objects > 0, "Scene requires at least one object")
+    local box = self.objects[1]:boundingBox()
+    local AABB = require "RayTracer.Acceleration.AABB"
+    for index = 2, #self.objects do
+        box = AABB.fromBoxes(box, self.objects[index]:boundingBox())
+    end
+    return box
+end
+
+function Scene:buildBVH()
+    local BVH = require "RayTracer.Acceleration.BVH"
+    return BVH.new(self.objects)
+end
+
 return Scene
