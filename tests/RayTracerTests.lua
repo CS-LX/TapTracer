@@ -1,4 +1,5 @@
 local RT = require "RayTracer"
+local QualityPresets = require "RayTracer.Config.QualityPresets"
 
 local function assertNear(actual, expected, epsilon, label)
     if math.abs(actual - expected) > epsilon then
@@ -569,6 +570,26 @@ local function testCornellBoxSceneGeometry()
     assertNear(box.maximum.z, 4, 1e-3, "Cornell Box bounds max z")
 end
 
+local function testQualityPresets()
+    local preview = QualityPresets.get("preview")
+    assertNear(preview.width, 256, 0, "preview width")
+    assertNear(preview.height, 144, 0, "preview height")
+    assertNear(preview.samplesPerPixel, 8, 0, "preview spp")
+
+    local square = QualityPresets.get("quality-square")
+    assertNear(square.width, 256, 0, "square width")
+    assertNear(square.height, 256, 0, "square height")
+    assertNear(square.samplesPerPixel, 16, 0, "square spp")
+
+    local offline = QualityPresets.get("offline")
+    assertNear(offline.width, 512, 0, "offline width")
+    assertNear(offline.height, 512, 0, "offline height")
+    assertNear(offline.samplesPerPixel, 32, 0, "offline spp")
+
+    local ok = pcall(QualityPresets.get, "missing")
+    assert(not ok, "unknown quality preset should fail")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -599,6 +620,7 @@ testAcceleration()
 testLightingAndTextures()
 testQuadAndRussianRoulette()
 testCornellBoxSceneGeometry()
+testQualityPresets()
 testPhaseCRenderer()
 testPresenters()
 testOutput()

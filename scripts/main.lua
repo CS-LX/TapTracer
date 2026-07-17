@@ -1,17 +1,20 @@
 local RayTracer = require "RayTracer"
+local QualityPresets = require "RayTracer.Config.QualityPresets"
 local UI = require("urhox-libs/UI")
+
+local ACTIVE_QUALITY = "preview"
+local ACTIVE_PRESET = QualityPresets.get(ACTIVE_QUALITY)
 
 local CONFIG = {
     title = "CPU Ray Tracer · Poolcore Courtyard",
-    width = 160,
-    height = 90,
-    samplesPerPixel = 16,
-    progressiveChunkWidth = 64,
-    maxTilesPerStep = 1,
+    quality = ACTIVE_QUALITY,
+    width = ACTIVE_PRESET.width,
+    height = ACTIVE_PRESET.height,
+    samplesPerPixel = ACTIVE_PRESET.samplesPerPixel,
+    progressiveChunkWidth = ACTIVE_PRESET.progressiveChunkWidth,
+    maxTilesPerStep = ACTIVE_PRESET.maxTilesPerStep,
     maxDepth = 8,
     denoise = false,
-    rawDisplayWidth = 160,
-    denoisedDisplayWidth = 128,
 }
 
 ---@type table|nil
@@ -337,7 +340,7 @@ local function buildUI()
         width = "100%",
         top = 10,
         height = 32,
-        text = CONFIG.title,
+        text = string.format("%s · %s", CONFIG.title, CONFIG.quality),
         fontSize = 18,
         fontColor = { 235, 242, 255, 255 },
         textAlign = "center",
@@ -423,7 +426,13 @@ function Start()
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent(vg_, "NanoVGRender", "HandleRender")
     SubscribeToEvent("ScreenMode", "HandleScreenMode")
-    print(string.format("[RayTracer] started: %dx%d", CONFIG.width, CONFIG.height))
+    print(string.format(
+        "[RayTracer] started: preset=%s resolution=%dx%d spp=%d",
+        CONFIG.quality,
+        CONFIG.width,
+        CONFIG.height,
+        CONFIG.samplesPerPixel
+    ))
 end
 
 ---@param eventType string
