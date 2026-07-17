@@ -1,11 +1,16 @@
 local Interval = require "RayTracer.Math.Interval"
+local Vec3 = require "RayTracer.Math.Vec3"
 
 local Sphere = {}
 Sphere.__index = Sphere
 
-function Sphere.new(center, radius)
+function Sphere.new(center, radius, material)
     assert(radius > 0, "Sphere radius must be positive")
-    return setmetatable({ center = center, radius = radius }, Sphere)
+    return setmetatable({
+        center = center,
+        radius = radius,
+        material = material,
+    }, Sphere)
 end
 
 function Sphere:hit(ray, rayInterval)
@@ -37,6 +42,7 @@ function Sphere:hit(ray, rayInterval)
         t = t,
         frontFace = true,
         object = self,
+        material = self.material,
     }
     local outwardNormal = (record.point - self.center) / self.radius
     record.frontFace = ray.direction:dot(outwardNormal) < 0
@@ -46,7 +52,7 @@ end
 
 function Sphere:boundingBox()
     local radius = self.radius
-    local delta = require "RayTracer.Math.Vec3".new(radius, radius, radius)
+    local delta = Vec3.new(radius, radius, radius)
     return self.center - delta, self.center + delta
 end
 

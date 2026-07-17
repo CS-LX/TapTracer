@@ -77,6 +77,55 @@ local function renderFilm()
     return renderer.film
 end
 
+local function testMaterials()
+    local record = {
+        point = Vec3.new(0, 0, 0),
+        normal = Vec3.new(0, 1, 0),
+        frontFace = true,
+    }
+    local incoming = Ray.new(Vec3.new(0, 1, 0), Vec3.new(0, -1, 0))
+
+    local diffuseColor = Vec3.new(0.7, 0.2, 0.1)
+    local diffuse = RT.Lambertian.new(diffuseColor)
+    local diffuseRay, diffuseAttenuation = diffuse:scatter(incoming, record, RT.RNG.new(5))
+    assert(diffuseRay ~= nil, "Lambertian should always scatter")
+    assertVectorNear(diffuseAttenuation, diffuseColor, 1e-8, "Lambertian attenuation")
+    assert(diffuseRay.direction:dot(record.normal) > -1, "Lambertian scatter should be valid")
+
+    local polished = RT.Metal.new(Vec3.new(0.8, 0.8, 0.8), -1)
+    assertNear(polished.fuzz, 0, 0, "Metal minimum fuzz")
+    local rough = RT.Metal.new(Vec3.new(0.8, 0.8, 0.8), 2)
+    assertNear(rough.fuzz, 1, 0, "Metal maximum fuzz")
+    local metalRay, metalAttenuation = polished:scatter(incoming, record, RT.RNG.new(5))
+    assert(metalRay ~= nil, "Metal should reflect front-facing ray")
+    assert(metalRay.direction:dot(record.normal) > 0, "Metal reflection should leave surface")
+    assertVectorNear(metalAttenuation, Vec3.new(0.8, 0.8, 0.8), 1e-8, "Metal attenuation")
+
+    local glass = RT.Dielectric.new(1.5)
+    local glassRay, glassAttenuation = glass:scatter(incoming, record, RT.RNG.new(5))
+    assert(glassRay ~= nil, "Dielectric should scatter")
+    assertVectorNear(glassAttenuation, Vec3.new(1, 1, 1), 1e-8, "Dielectric attenuation")
+    assertNear(glassRay.direction:length(), 1, 1e-8, "Dielectric direction length")
+end
+
+local function testPathIntegrator()
+    local scene = RT.Scene.new()
+    scene:add(RT.Sphere.new(
+        Vec3.new(0, 0, -1),
+        0.5,
+        RT.Lambertian.new(Vec3.new(0.7, 0.3, 0.3))
+    ))
+    local integrator = RT.PathIntegrator.new {
+        maxDepth = 8,
+        background = Vec3.new(0.5, 0.7, 1.0),
+    }
+    local ray = Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1))
+    local color = integrator:trace(ray, scene, RT.RNG.new(42))
+    assert(color ~= nil, "Path integrator should return a color")
+    assert(color.x == color.x and color.y == color.y and color.z == color.z, "Path color must not be NaN")
+    assert(color.x >= 0 and color.y >= 0 and color.z >= 0, "Path color must be non-negative")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -101,5 +150,7 @@ end
 testVectorMath()
 testRayAndSphere()
 testDeterministicRng()
+testMaterials()
+testPathIntegrator()
 testOutput()
 print("[RayTracerTests] all tests passed")

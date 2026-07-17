@@ -2,11 +2,12 @@ local RayTracer = require "RayTracer"
 local UI = require("urhox-libs/UI")
 
 local CONFIG = {
-    title = "CPU Ray Tracer · 第一轮法线图",
-    width = 64,
-    height = 36,
-    samplesPerPixel = 1,
-    maxPixelsPerStep = 32,
+    title = "CPU Ray Tracer · 第二轮材质球",
+    width = 96,
+    height = 54,
+    samplesPerPixel = 4,
+    maxPixelsPerStep = 16,
+    maxDepth = 8,
 }
 
 ---@type table|nil
@@ -29,17 +30,25 @@ local reportedComplete_ = false
 
 local function buildScene()
     local Vec3 = RayTracer.Vec3
+    local red = RayTracer.Lambertian.new(Vec3.new(0.75, 0.18, 0.15))
+    local blue = RayTracer.Lambertian.new(Vec3.new(0.12, 0.32, 0.78))
+    local metal = RayTracer.Metal.new(Vec3.new(0.82, 0.84, 0.88), 0.12)
+    local glass = RayTracer.Dielectric.new(1.5)
+
     scene_ = RayTracer.Scene.new()
-    scene_:add(RayTracer.Sphere.new(Vec3.new(0, 0, -1), 0.5))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(0, -100.5, -1), 100))
+    scene_:add(RayTracer.Sphere.new(Vec3.new(0, 0, -1.1), 0.5, red))
+    scene_:add(RayTracer.Sphere.new(Vec3.new(-1.05, 0, -1.4), 0.5, glass))
+    scene_:add(RayTracer.Sphere.new(Vec3.new(1.05, 0, -1.25), 0.5, metal))
+    scene_:add(RayTracer.Sphere.new(Vec3.new(0, -100.5, -1), 100, blue))
 
     camera_ = RayTracer.Camera.new {
         aspectRatio = CONFIG.width / CONFIG.height,
         imageWidth = CONFIG.width,
-        verticalFov = 40,
-        lookFrom = Vec3.new(0, 0, 0),
+        verticalFov = 35,
+        lookFrom = Vec3.new(3.2, 1.6, 4.2),
         lookAt = Vec3.new(0, 0, -1),
         up = Vec3.new(0, 1, 0),
+        defocusAngle = 0.6,
     }
 end
 
@@ -50,9 +59,13 @@ local function buildRenderer()
         width = CONFIG.width,
         height = CONFIG.height,
         samplesPerPixel = CONFIG.samplesPerPixel,
+        maxDepth = CONFIG.maxDepth,
         tileSize = 8,
         seed = 42,
-        integrator = RayTracer.NormalIntegrator.new(),
+        integrator = RayTracer.PathIntegrator.new {
+            maxDepth = CONFIG.maxDepth,
+            background = RayTracer.Vec3.new(0.5, 0.7, 1.0),
+        },
     }
 end
 
@@ -71,8 +84,8 @@ local function buildUI()
         left = 0,
         width = "100%",
         bottom = 54,
-        height = 28,
-        text = "初始化中",
+        height = 36,
+        text = "初始化中 · 材质球场景",
         fontSize = 14,
         fontColor = { 206, 224, 244, 255 },
         textAlign = "center",
@@ -206,7 +219,7 @@ function HandleUpdate(eventType, eventData)
         statusLabel:SetText(string.format("渲染中 %.1f%%", progress * 100))
         progressBar:SetValue(progress)
     elseif not reportedComplete_ then
-        statusLabel:SetText("渲染完成 · 法线积分器")
+        statusLabel:SetText("渲染完成 · Lambertian / Metal / Dielectric")
         progressBar:SetValue(1)
         reportedComplete_ = true
         print("[RayTracer] render complete")

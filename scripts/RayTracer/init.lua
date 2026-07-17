@@ -7,7 +7,11 @@ local Scene = require "RayTracer.Core.Scene"
 local Film = require "RayTracer.Core.Film"
 local Renderer = require "RayTracer.Core.Renderer"
 local NormalIntegrator = require "RayTracer.Integrator.NormalIntegrator"
+local PathIntegrator = require "RayTracer.Integrator.PathIntegrator"
 local Sphere = require "RayTracer.Geometry.Sphere"
+local Lambertian = require "RayTracer.Material.Lambertian"
+local Metal = require "RayTracer.Material.Metal"
+local Dielectric = require "RayTracer.Material.Dielectric"
 local PPMWriter = require "RayTracer.IO.PPMWriter"
 local AsciiPresenter = require "RayTracer.IO.AsciiPresenter"
 
@@ -22,7 +26,11 @@ return {
     Film = Film,
     Renderer = Renderer,
     NormalIntegrator = NormalIntegrator,
+    PathIntegrator = PathIntegrator,
     Sphere = Sphere,
+    Lambertian = Lambertian,
+    Metal = Metal,
+    Dielectric = Dielectric,
     PPMWriter = PPMWriter,
     AsciiPresenter = AsciiPresenter,
 }
