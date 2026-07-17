@@ -77,6 +77,152 @@ local function renderFilm()
     return renderer.film
 end
 
+local function createTestRenderer(options)
+    options = options or {}
+    local scene = RT.Scene.new()
+    scene:add(RT.Sphere.new(Vec3.new(0, 0, -1), 0.5))
+    scene:add(RT.Sphere.new(Vec3.new(0, -100.5, -1), 100))
+    local camera = RT.Camera.new {
+        aspectRatio = 16 / 9,
+        imageWidth = options.width or 16,
+        verticalFov = 40,
+        lookFrom = Vec3.new(0, 0, 0),
+        lookAt = Vec3.new(0, 0, -1),
+    }
+    return RT.Renderer.new {
+        camera = camera,
+        scene = scene,
+        width = options.width or 16,
+        height = options.height or 9,
+        samplesPerPixel = options.samplesPerPixel or 1,
+        tileSize = options.tileSize or 4,
+        seed = options.seed or 42,
+        presenter = options.presenter,
+        integrator = RT.NormalIntegrator.new(),
+    }
+end
+
+local function filmsMatch(first, second)
+    assert(first.width == second.width and first.height == second.height, "film dimensions should match")
+    for y = 0, first.height - 1 do
+        for x = 0, first.width - 1 do
+            local firstR, firstG, firstB = first:get(x, y)
+            local secondR, secondG, secondB = second:get(x, y)
+            assertNear(firstR, secondR, 0, "film red channel")
+            assertNear(firstG, secondG, 0, "film green channel")
+            assertNear(firstB, secondB, 0, "film blue channel")
+        end
+    end
+end
+
+local function testPhaseCRenderer()
+    local blocking = createTestRenderer {
+        width = 10,
+        height = 9,
+        tileSize = 4,
+        samplesPerPixel = 2,
+        seed = 99,
+    }
+    assertNear(blocking:getStats().totalTiles, 9, 0, "tile count")
+    blocking:render()
+    local blockingStats = blocking:getStats()
+    assert(blockingStats.complete, "blocking renderer should complete")
+    assertNear(blockingStats.completedTiles, 9, 0, "completed tile count")
+    assertNear(blockingStats.completedPixels, 90, 0, "completed pixel count")
+    assertNear(blockingStats.totalSamples, 180, 0, "total sample count")
+    assertNear(blockingStats.totalRays, 180, 0, "total ray count")
+
+    local stepped = createTestRenderer {
+        width = 10,
+        height = 9,
+        tileSize = 4,
+        samplesPerPixel = 2,
+        seed = 99,
+    }
+    assertNear(stepped:step(1), 1, 0, "one tile step")
+    assertNear(stepped:getStats().completedPixels, 16, 0, "first tile pixels")
+    assert(stepped:progress() < 1, "partial renderer should not be complete")
+    stepped:render()
+    filmsMatch(blocking.film, stepped.film)
+
+    local resetStats = stepped:getStats()
+    stepped:reset()
+    local afterReset = stepped:getStats()
+    assertNear(afterReset.completedTiles, 0, 0, "reset tile count")
+    assertNear(afterReset.completedPixels, 0, 0, "reset pixel count")
+    assertNear(afterReset.totalSamples, 0, 0, "reset sample count")
+    assert(not afterReset.complete and not afterReset.cancelled, "reset should clear renderer state")
+    stepped:render()
+    filmsMatch(blocking.film, stepped.film)
+    assert(resetStats.complete, "pre-reset renderer should have completed")
+
+    local cancelledTiles = 0
+    local callback = RT.CallbackPresenter.new {
+        onTile = function(_, _, _, _, _, renderer)
+            cancelledTiles = cancelledTiles + 1
+            renderer:cancel()
+        end,
+    }
+    local cancelled = createTestRenderer { presenter = callback }
+    cancelled:step(100)
+    local cancelledStats = cancelled:getStats()
+    assertNear(cancelledTiles, 1, 0, "cancel callback count")
+    assert(cancelledStats.cancelled, "renderer should be cancelled")
+    assert(not cancelledStats.complete, "cancelled renderer should not complete")
+    assertNear(cancelledStats.completedTiles, 1, 0, "cancelled tile count")
+    local completedPixels = cancelledStats.completedPixels
+    assertNear(cancelled:step(100), 0, 0, "cancelled step result")
+    assertNear(cancelled:getStats().completedPixels, completedPixels, 0, "cancelled renderer should not advance")
+end
+
+local function testPresenters()
+    local tiles = 0
+    local started = false
+    local progressCalls = 0
+    local completed = false
+    local callback = RT.CallbackPresenter.new {
+        onStart = function(width, height, renderer)
+            started = width == 8 and height == 6 and renderer ~= nil
+        end,
+        onTile = function(x, y, width, height, pixels, renderer)
+            tiles = tiles + 1
+            assert(x >= 0 and y >= 0, "callback tile origin")
+            assert(width > 0 and height > 0, "callback tile size")
+            assert(#pixels == width * height, "callback tile pixel count")
+            assert(renderer ~= nil, "callback renderer")
+        end,
+        onProgress = function(done, total, renderer)
+            progressCalls = progressCalls + 1
+            assert(done <= total, "callback progress bounds")
+            assert(renderer ~= nil, "progress renderer")
+        end,
+        onComplete = function(film, renderer)
+            completed = film.width == 8 and film.height == 6 and renderer ~= nil
+        end,
+    }
+    local renderer = createTestRenderer {
+        width = 8,
+        height = 6,
+        tileSize = 4,
+        presenter = callback,
+    }
+    renderer:render()
+    assert(started, "callback start")
+    assertNear(tiles, 4, 0, "callback tile count")
+    assert(progressCalls > 0, "callback progress")
+    assert(completed, "callback complete")
+
+    local ansiOutput = nil
+    local ansi = RT.AnsiPresenter.new(function(value)
+        ansiOutput = value
+    end)
+    ansi:onStart(8, 6)
+    ansi:onComplete(renderer.film)
+    assert(ansiOutput ~= nil and #ansiOutput > 0, "ANSI output should not be empty")
+    assert(ansiOutput:find("\27%[48;2;", 1) ~= nil, "ANSI true-color escape")
+    assert(ansiOutput:find("\27%[0m", 1) ~= nil, "ANSI reset escape")
+end
+
 local function testMaterials()
     local record = {
         point = Vec3.new(0, 0, 0),
@@ -152,5 +298,7 @@ testRayAndSphere()
 testDeterministicRng()
 testMaterials()
 testPathIntegrator()
+testPhaseCRenderer()
+testPresenters()
 testOutput()
 print("[RayTracerTests] all tests passed")

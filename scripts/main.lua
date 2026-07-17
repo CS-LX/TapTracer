@@ -6,7 +6,7 @@ local CONFIG = {
     width = 96,
     height = 54,
     samplesPerPixel = 4,
-    maxPixelsPerStep = 16,
+    maxTilesPerStep = 1,
     maxDepth = 8,
 }
 
@@ -213,7 +213,7 @@ function HandleUpdate(eventType, eventData)
     end
 
     if not renderer:isComplete() then
-        renderer:step(CONFIG.maxPixelsPerStep)
+        renderer:step(CONFIG.maxTilesPerStep)
         frame_ = renderer.film
         local progress = renderer:progress()
         statusLabel:SetText(string.format("渲染中 %.1f%%", progress * 100))

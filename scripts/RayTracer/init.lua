@@ -14,6 +14,8 @@ local Metal = require "RayTracer.Material.Metal"
 local Dielectric = require "RayTracer.Material.Dielectric"
 local PPMWriter = require "RayTracer.IO.PPMWriter"
 local AsciiPresenter = require "RayTracer.IO.AsciiPresenter"
+local AnsiPresenter = require "RayTracer.IO.AnsiPresenter"
+local CallbackPresenter = require "RayTracer.IO.CallbackPresenter"
 
 return {
     Vec3 = Vec3,
@@ -33,4 +35,6 @@ return {
     Dielectric = Dielectric,
     PPMWriter = PPMWriter,
     AsciiPresenter = AsciiPresenter,
+    AnsiPresenter = AnsiPresenter,
+    CallbackPresenter = CallbackPresenter,
 }

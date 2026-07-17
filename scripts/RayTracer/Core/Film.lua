@@ -10,6 +10,12 @@ function Film.new(width, height)
     return setmetatable({ width = width, height = height, pixels = pixels }, Film)
 end
 
+function Film:clear()
+    for i = 1, #self.pixels do
+        self.pixels[i] = { r = 0, g = 0, b = 0 }
+    end
+end
+
 function Film:index(x, y)
     return y * self.width + x + 1
 end
