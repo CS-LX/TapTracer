@@ -40,14 +40,17 @@ function Dielectric:scatter(ray, record, rng)
     local sinTheta = math.sqrt(math.max(0.0, 1.0 - cosTheta * cosTheta))
     local cannotRefract = ratio * sinTheta > 1
     local direction
+    local scatterEvent
 
     if cannotRefract or reflectance(cosTheta, ratio) > rng:nextFloat() then
         direction = unitDirection:reflect(record.normal)
+        scatterEvent = "reflection"
     else
         direction = unitDirection:refract(record.normal, ratio)
+        scatterEvent = "transmission"
     end
 
-    return Ray.new(record.point, direction), attenuation, true
+    return Ray.new(record.point, direction), attenuation, true, scatterEvent
 end
 
 return Dielectric

@@ -471,6 +471,241 @@ local function testDirectLightMaterialBoundary()
         "AOV collection must not change Beauty radiance")
 end
 
+local function testAOVCorrect5TransmissionDiagnostics()
+    local glass = RT.Dielectric.new(1.5)
+    local record = {
+        point = Vec3.new(0, 0, 0),
+        normal = Vec3.new(0, 1, 0),
+        frontFace = true,
+    }
+    local incoming = Ray.new(
+        Vec3.new(0, 1, 0),
+        Vec3.new(0, -1, 0)
+    )
+    local function fixedRng(value)
+        return {
+            nextFloat = function()
+                return value
+            end,
+        }
+    end
+
+    local reflected, reflectedAttenuation, reflectedSpecular, reflectedEvent =
+        glass:scatter(incoming, record, fixedRng(0))
+    assert(reflectedEvent == "reflection",
+        "Dielectric should report Fresnel reflection")
+    assert(reflectedSpecular == true,
+        "Dielectric reflection remains specular")
+    assertVectorNear(reflectedAttenuation, Vec3.new(1, 1, 1), 0,
+        "Dielectric reflection attenuation")
+    assertVectorNear(reflected.direction, Vec3.new(0, 1, 0), 1e-12,
+        "Dielectric reflection direction")
+
+    local transmitted, transmittedAttenuation, transmittedSpecular, transmittedEvent =
+        glass:scatter(incoming, record, fixedRng(1))
+    assert(transmittedEvent == "transmission",
+        "Dielectric should report refraction")
+    assert(transmittedSpecular == true,
+        "Dielectric refraction remains specular")
+    assertVectorNear(transmittedAttenuation, Vec3.new(1, 1, 1), 0,
+        "Dielectric refraction attenuation")
+    assertVectorNear(transmitted.direction, Vec3.new(0, -1, 0), 1e-12,
+        "Dielectric refraction direction")
+
+    local primaryRecord = {
+        point = record.point,
+        normal = record.normal,
+        frontFace = record.frontFace,
+        material = glass,
+    }
+    local diffuseStop = {
+        denoiseClass = function()
+            return "diffuse"
+        end,
+        emitted = function()
+            return Vec3.new(0, 0, 0)
+        end,
+        scatter = function()
+            return nil
+        end,
+    }
+    local diffuseRecord = {
+        point = Vec3.new(0, -1, 0),
+        normal = Vec3.new(0, 1, 0),
+        frontFace = true,
+        material = diffuseStop,
+    }
+    local diffuseCalls = 0
+    local diffuseScene = {
+        hit = function()
+            diffuseCalls = diffuseCalls + 1
+            if diffuseCalls == 1 then
+                return primaryRecord
+            elseif diffuseCalls == 2 then
+                return diffuseRecord
+            end
+            return nil
+        end,
+    }
+    local diffuseIntegrator = RT.PathIntegrator.new {
+        maxDepth = 3,
+        background = Vec3.new(0.2, 0.3, 0.4),
+        roulette = false,
+    }
+    diffuseIntegrator:trace(incoming, diffuseScene, fixedRng(1))
+    local diffuseStats = diffuseIntegrator:getStats()
+    assertNear(diffuseStats.primaryTransmissionCount, 1, 0,
+        "primary transmission path count")
+    assertNear(diffuseStats.primaryTransmissionReflectionCount, 0, 0,
+        "primary transmission reflection count")
+    assertNear(diffuseStats.primaryTransmissionRefractionCount, 1, 0,
+        "primary transmission refraction count")
+    assertNear(diffuseStats.primaryTransmissionFirstDiffuseCount, 1, 0,
+        "first diffuse target count")
+    assertNear(diffuseCalls, 2, 0,
+        "transmission diagnostics must not add scene hits")
+    assertNear(
+        diffuseStats.primaryTransmissionFirstDiffuseCount
+            + diffuseStats.primaryTransmissionFirstGlossyCount
+            + diffuseStats.primaryTransmissionFirstEmissionCount
+            + diffuseStats.primaryTransmissionFirstOtherCount
+            + diffuseStats.primaryTransmissionSkyCount
+            + diffuseStats.primaryTransmissionRouletteCount
+            + diffuseStats.primaryTransmissionScatterStopCount
+            + diffuseStats.primaryTransmissionDepthLimitCount,
+        diffuseStats.primaryTransmissionCount,
+        0,
+        "diffuse transmission destination accounting"
+    )
+
+    local skyCalls = 0
+    local skyScene = {
+        hit = function()
+            skyCalls = skyCalls + 1
+            if skyCalls == 1 then
+                return primaryRecord
+            end
+            return nil
+        end,
+    }
+    local skyIntegrator = RT.PathIntegrator.new {
+        maxDepth = 3,
+        background = Vec3.new(0.2, 0.3, 0.4),
+        roulette = false,
+    }
+    skyIntegrator:trace(incoming, skyScene, fixedRng(0))
+    local skyStats = skyIntegrator:getStats()
+    assertNear(skyStats.primaryTransmissionReflectionCount, 1, 0,
+        "primary Fresnel reflection count")
+    assertNear(skyStats.primaryTransmissionSkyCount, 1, 0,
+        "primary transmission sky termination count")
+    assertNear(skyCalls, 2, 0,
+        "sky diagnostics must not add scene hits")
+    assertNear(
+        skyStats.primaryTransmissionReflectionCount
+            + skyStats.primaryTransmissionRefractionCount,
+        skyStats.primaryTransmissionCount,
+        0,
+        "primary transmission branch accounting"
+    )
+
+    local depthCalls = 0
+    local depthScene = {
+        hit = function()
+            depthCalls = depthCalls + 1
+            return primaryRecord
+        end,
+    }
+    local depthIntegrator = RT.PathIntegrator.new {
+        maxDepth = 1,
+        background = Vec3.new(0.2, 0.3, 0.4),
+        roulette = false,
+    }
+    depthIntegrator:trace(incoming, depthScene, fixedRng(1))
+    local depthStats = depthIntegrator:getStats()
+    assertNear(depthStats.primaryTransmissionDepthLimitCount, 1, 0,
+        "primary transmission depth-limit count")
+
+    local stoppingGlass = {
+        denoiseClass = function()
+            return "delta_transmission"
+        end,
+        emitted = function()
+            return Vec3.new(0, 0, 0)
+        end,
+        scatter = function()
+            return nil, nil, true, "transmission"
+        end,
+    }
+    local stopCalls = 0
+    local stopScene = {
+        hit = function()
+            stopCalls = stopCalls + 1
+            if stopCalls == 1 then
+                return {
+                    point = record.point,
+                    normal = record.normal,
+                    frontFace = record.frontFace,
+                    material = stoppingGlass,
+                }
+            end
+            return nil
+        end,
+    }
+    local stopIntegrator = RT.PathIntegrator.new {
+        maxDepth = 3,
+        background = Vec3.new(0.2, 0.3, 0.4),
+        roulette = false,
+    }
+    stopIntegrator:trace(incoming, stopScene, fixedRng(1))
+    local stopStats = stopIntegrator:getStats()
+    assertNear(stopStats.primaryTransmissionScatterStopCount, 1, 0,
+        "primary transmission scatter-stop count")
+    assertNear(stopCalls, 1, 0,
+        "scatter-stop diagnostics must not add scene hits")
+
+    local legacyGlass = {
+        denoiseClass = function(_, hitRecord)
+            return glass:denoiseClass(hitRecord)
+        end,
+        emitted = function(_, hitRecord)
+            return glass:emitted(hitRecord)
+        end,
+        scatter = function(_, sourceRay, hitRecord, rng)
+            local scatteredRay, attenuation, isSpecular =
+                glass:scatter(sourceRay, hitRecord, rng)
+            return scatteredRay, attenuation, isSpecular
+        end,
+    }
+    local function traceSky(material)
+        local calls = 0
+        local scene = {
+            hit = function()
+                calls = calls + 1
+                if calls == 1 then
+                    return {
+                        point = record.point,
+                        normal = record.normal,
+                        frontFace = record.frontFace,
+                        material = material,
+                    }
+                end
+                return nil
+            end,
+        }
+        local integrator = RT.PathIntegrator.new {
+            maxDepth = 3,
+            background = Vec3.new(0.2, 0.3, 0.4),
+            roulette = false,
+        }
+        return integrator:trace(incoming, scene, fixedRng(1))
+    end
+    local diagnosticBeauty = traceSky(glass)
+    local legacyBeauty = traceSky(legacyGlass)
+    assertVectorNear(diagnosticBeauty, legacyBeauty, 0,
+        "transmission diagnostics must not change Beauty")
+end
+
 local function testAcceleration()
     local unitBox = RT.AABB.new(Vec3.new(-1, -1, -1), Vec3.new(1, 1, 1))
     local interval = Interval.new(0.001, math.huge)
@@ -1154,6 +1389,7 @@ testDeterministicRng()
 testMaterials()
 testPathIntegrator()
 testDirectLightMaterialBoundary()
+testAOVCorrect5TransmissionDiagnostics()
 testAcceleration()
 testLightingAndTextures()
 testQuadAndRussianRoulette()

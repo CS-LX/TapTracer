@@ -613,6 +613,44 @@ local function printRenderStats(renderer)
         displayAOVCandidateVisits_,
         displayAOVAcceptedVisits_
     ))
+    local transmissionCount = integrator.primaryTransmissionCount or 0
+    local reflectionCount = integrator.primaryTransmissionReflectionCount or 0
+    local refractionCount = integrator.primaryTransmissionRefractionCount or 0
+    local firstDiffuseCount = integrator.primaryTransmissionFirstDiffuseCount or 0
+    local firstGlossyCount = integrator.primaryTransmissionFirstGlossyCount or 0
+    local firstEmissionCount = integrator.primaryTransmissionFirstEmissionCount or 0
+    local firstOtherCount = integrator.primaryTransmissionFirstOtherCount or 0
+    local skyCount = integrator.primaryTransmissionSkyCount or 0
+    local rouletteCount = integrator.primaryTransmissionRouletteCount or 0
+    local scatterStopCount = integrator.primaryTransmissionScatterStopCount or 0
+    local depthLimitCount = integrator.primaryTransmissionDepthLimitCount or 0
+    local classifiedCount = firstDiffuseCount
+        + firstGlossyCount
+        + firstEmissionCount
+        + firstOtherCount
+        + skyCount
+        + rouletteCount
+        + scatterStopCount
+        + depthLimitCount
+    print(string.format(
+        "[RayTracer][H5] primaryTransmission=%d reflection=%d refraction=%d unclassifiedBranch=%d",
+        transmissionCount,
+        reflectionCount,
+        refractionCount,
+        math.max(0, transmissionCount - reflectionCount - refractionCount)
+    ))
+    print(string.format(
+        "[RayTracer][H5] firstDiffuse=%d firstGlossy=%d firstEmission=%d firstOther=%d sky=%d roulette=%d scatterStop=%d depthLimit=%d unresolved=%d",
+        firstDiffuseCount,
+        firstGlossyCount,
+        firstEmissionCount,
+        firstOtherCount,
+        skyCount,
+        rouletteCount,
+        scatterStopCount,
+        depthLimitCount,
+        math.max(0, transmissionCount - classifiedCount)
+    ))
 end
 
 function Start()

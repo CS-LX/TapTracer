@@ -499,9 +499,9 @@ Clamp / Image / Texture2D
 - 降噪显示成本与路径积分成本分开统计；
 - 默认方案以亮度稳定和材质可信为先，不以最平滑为先。
 
-### AOV-Correct-5：transmission 最小诊断（等待黑盒数据，2026-07-18）
+### AOV-Correct-5：transmission 最小诊断（已停止，2026-07-18）
 
-目标：先确认水面噪声的路径构成和终止去向，再决定是否值得实现 transmission 专项显示候选；在收益未知前不拆完整 lobe Film。
+目标：确认水面噪声的路径构成和终止去向，并在收益不足时停止 transmission 专项显示候选；不拆完整 lobe Film。
 
 已实现的最小诊断：
 
@@ -511,7 +511,15 @@ Clamp / Image / Texture2D
 - 去向统计：沿连续 delta 链找到的首次 diffuse、glossy、emission、其他非 delta 命中，或 sky、Russian Roulette、scatter stop、depth limit 终止；
 - 每条主 transmission 路径最多进入一个去向桶；日志额外输出 `unresolved`，用于发现统计未闭合；
 - 渲染完成时输出两行 `[RayTracer][H5]`，不新增 Inspector 开关，不改变 Correct-4 默认 `3×3 + 3轮`；
-- 本阶段不创建 diffuse/specular/transmission Film，不过滤 `delta_transmission`，不修改 Beauty Film、Primary AOV 或显示结果。
+- 本阶段不创建 diffuse/specular/transmission Film，不修改 Beauty Film 或 Primary AOV。
+
+弱 transmission 显示候选决策：
+
+- 已完成一次固定基准 Preview 量化实验：`256×144`、`32 spp`、`maxDepth=6`、denoise 开启、`3×3 + 3轮`；
+- 候选曾以 `20%` 显示混合强度运行，统计确认 `6721` 个 transmission 像素参与，平均亮度变化 `-0.021%`，同类相邻亮度差变化 `-2.831%`；
+- 虽然亮度门禁和数值噪声指标通过，但完整截图中水面没有可感知的降噪改善；
+- 候选已移除，默认 `delta_transmission` 恢复直通；不保留候选开关、候选统计或额外显示成本；
+- Correct-5 在 transmission 统计诊断完成、弱显示候选收益不足处停止；后续如需改善水面，应等待 MIS、路径指导或完整 transmission/lobe AOV 方案，不继续放宽当前显示滤波门禁。
 
 自动回归：
 
@@ -583,6 +591,6 @@ Clamp / Image / Texture2D
 - `AOV-Correct-3` 首版黑盒曾因无方向 Depth hard-stop 产生墙面竖纹与地面横纹；
 - `AOV-Correct-3.1` 已以方向深度梯度残差修复该问题，自动回归、截图量化与 Poolcore Courtyard 黑盒均已通过；Correct-3 正式完成；
 - `AOV-Correct-4` 已完成：四组 kernel/轮数黑盒与 H4 成本实测证明轮数是主要质量变量，5×5 的小幅收益不足以覆盖约 2.3～2.5 倍成本；Preview 默认保持 `3×3 + 3轮`；
-- 下一阶段按需进入 `AOV-Correct-5`，只评估水面/高光仍不可接受时的 lobe 或 transmission 专项方案；
+- `AOV-Correct-5` 已完成并停止：transmission 统计闭环通过；弱 transmission 显示候选在固定基准下仅带来 `-2.831%` 相邻亮度差变化，肉眼无可感知收益，已恢复 `delta_transmission` 直通；后续等待 MIS、路径指导或完整 transmission/lobe AOV；
 - Inspector 在渲染完成后切换 denoise 不主动刷新显示的既有行为按当前决策暂不修改；
 - Correct-4 继续以亮度稳定和材质可信为首要门禁，不通过放宽权重或增加轮数单纯追求平滑。
