@@ -253,6 +253,30 @@ local function testPhaseCRenderer()
     assertNear(passGreen, 0.6, 1e-8, "film running green average")
     assertNear(passBlue, 0.8, 1e-8, "film running blue average")
     assertNear(passFilm:getSampleCount(0, 0), 2, 0, "film sample count")
+    local expectedLuminanceA = 0.2 * 0.2126 + 0.4 * 0.7152 + 0.6 * 0.0722
+    local expectedLuminanceB = 0.6 * 0.2126 + 0.8 * 0.7152 + 1.0 * 0.0722
+    local expectedLuminanceMean = (expectedLuminanceA + expectedLuminanceB) * 0.5
+    local expectedLuminanceVariance = (
+        (expectedLuminanceA - expectedLuminanceMean) ^ 2
+            + (expectedLuminanceB - expectedLuminanceMean) ^ 2
+    )
+    local luminanceMean, luminanceVariance, luminanceCount =
+        passFilm:getLuminanceMoments(0, 0)
+    assertNear(luminanceMean, expectedLuminanceMean, 1e-8, "film luminance mean")
+    assertNear(luminanceVariance, expectedLuminanceVariance, 1e-8,
+        "film luminance sample variance")
+    assertNear(luminanceCount, 2, 0, "film luminance sample count")
+    local meanLuminance, meanVariance = passFilm:getMeanLuminanceVariance(0, 0)
+    assertNear(meanLuminance, expectedLuminanceMean, 1e-8,
+        "film mean luminance moment")
+    assertNear(meanVariance, expectedLuminanceVariance / 2, 1e-8,
+        "film mean luminance variance")
+    passFilm:clear()
+    local clearedMean, clearedVariance, clearedCount =
+        passFilm:getLuminanceMoments(0, 0)
+    assertNear(clearedMean, 0, 0, "cleared film luminance mean")
+    assertNear(clearedVariance, 0, 0, "cleared film luminance variance")
+    assertNear(clearedCount, 0, 0, "cleared film luminance count")
 
     local cancelledTiles = 0
     local callback = RT.CallbackPresenter.new {
@@ -863,6 +887,145 @@ local function testAOVClassFiltering()
     )
 end
 
+local function testAOVCorrect3EdgeStopping()
+    local function makeFilm(values)
+        local film = RT.Film.new(#values, 1)
+        for x = 0, #values - 1 do
+            local value = values[x + 1]
+            film:addSample(x, 0, Vec3.new(value, value, value))
+        end
+        return film
+    end
+
+    local function makeAOV(normals, depths, coverages)
+        local aov = PrimaryAOV.new(#normals, 1)
+        for x = 0, #normals - 1 do
+            local sampleCount = 8
+            local hitCount = math.floor((coverages[x + 1] or 1) * sampleCount + 0.5)
+            for sample = 1, sampleCount do
+                if sample <= hitCount then
+                    aov:set(x, 0, {
+                        hit = true,
+                        class = "diffuse",
+                        albedo = Vec3.new(0.5, 0.5, 0.5),
+                        normal = normals[x + 1],
+                        depth = depths[x + 1],
+                    })
+                else
+                    aov:set(x, 0, nil)
+                end
+            end
+        end
+        return aov
+    end
+
+    local values = { 0.1, 0.1, 1.0 }
+    local upward = Vec3.new(0, 1, 0)
+    local forward = Vec3.new(0, 0, 1)
+    local normalFilm = makeFilm(values)
+    local normalFiltered = AOVAtrous.filter(normalFilm, makeAOV(
+        { upward, upward, forward },
+        { 1, 1, 1 },
+        { 1, 1, 1 }
+    ), 1)
+    local normalEdge = normalFiltered:get(1, 0)
+    assertNear(normalEdge, 0.1, 1e-12,
+        "orthogonal normal must contribute zero weight")
+
+    local depthFilm = makeFilm(values)
+    local depthFiltered = AOVAtrous.filter(depthFilm, makeAOV(
+        { upward, upward, upward },
+        { 1, 1, 2 },
+        { 1, 1, 1 }
+    ), 1)
+    local depthEdge = depthFiltered:get(1, 0)
+    assertNear(depthEdge, 0.1, 1e-12,
+        "large depth discontinuity must contribute zero weight")
+
+    local coverageFilm = makeFilm(values)
+    local coverageFiltered = AOVAtrous.filter(coverageFilm, makeAOV(
+        { upward, upward, upward },
+        { 1, 1, 1 },
+        { 1, 1, 0.5 }
+    ), 1)
+    local coverageEdge = coverageFiltered:get(1, 0)
+    assertNear(coverageEdge, 0.1, 1e-12,
+        "coverage discontinuity must contribute zero weight")
+
+    local hdrFilm = makeFilm({ 0.1, 0.1, 50.0 })
+    local beforeR, beforeG, beforeB = hdrFilm:get(2, 0)
+    local hdrFiltered = AOVAtrous.filter(hdrFilm, makeAOV(
+        { upward, upward, upward },
+        { 1, 1, 1 },
+        { 1, 1, 1 }
+    ), 1)
+    local hdrCenter = hdrFiltered:get(1, 0)
+    assert(hdrCenter < 0.2,
+        "HDR outlier must not spread into a large bright region")
+    local afterR, afterG, afterB = hdrFilm:get(2, 0)
+    assertNear(afterR, beforeR, 0, "filter must not change Film red")
+    assertNear(afterG, beforeG, 0, "filter must not change Film green")
+    assertNear(afterB, beforeB, 0, "filter must not change Film blue")
+end
+
+local function testAOVCorrect31DirectionalDepth()
+    local function makeGrid(depthAt)
+        local width = 9
+        local height = 9
+        local film = RT.Film.new(width, height)
+        local aov = PrimaryAOV.new(width, height)
+        local normal = Vec3.new(0, 1, 0)
+
+        for y = 0, height - 1 do
+            for x = 0, width - 1 do
+                local value = 0.2 + ((x + y) % 2) * 0.02
+                film:addSample(x, y, Vec3.new(value, value, value))
+                aov:set(x, y, {
+                    hit = true,
+                    class = "diffuse",
+                    albedo = Vec3.new(0.5, 0.5, 0.5),
+                    normal = normal,
+                    depth = depthAt(x, y),
+                })
+            end
+        end
+
+        return film, aov
+    end
+
+    local flatFilm, flatAOV = makeGrid(function()
+        return 2
+    end)
+    local flatFiltered = AOVAtrous.filter(flatFilm, flatAOV, 3)
+    local flatCenter = flatFiltered:get(4, 4)
+
+    local horizontalFilm, horizontalAOV = makeGrid(function(x)
+        return 2 + x * 0.02
+    end)
+    local horizontalFiltered = AOVAtrous.filter(
+        horizontalFilm, horizontalAOV, 3)
+    local horizontalCenter = horizontalFiltered:get(4, 4)
+    assertNear(
+        horizontalCenter,
+        flatCenter,
+        1e-12,
+        "horizontal planar depth gradient must not create vertical bands"
+    )
+
+    local verticalFilm, verticalAOV = makeGrid(function(_, y)
+        return 2 + y * 0.02
+    end)
+    local verticalFiltered = AOVAtrous.filter(
+        verticalFilm, verticalAOV, 3)
+    local verticalCenter = verticalFiltered:get(4, 4)
+    assertNear(
+        verticalCenter,
+        flatCenter,
+        1e-12,
+        "vertical planar depth gradient must not create horizontal bands"
+    )
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -898,6 +1061,8 @@ testQualityPresets()
 testDisplayDenoise()
 testPrimaryAOVAccumulation()
 testAOVClassFiltering()
+testAOVCorrect3EdgeStopping()
+testAOVCorrect31DirectionalDepth()
 testPhaseCRenderer()
 testPresenters()
 testOutput()

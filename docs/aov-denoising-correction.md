@@ -349,22 +349,98 @@ Clamp / Image / Texture2D
 - 关闭降噪时仍直接显示原始 Film；
 - Poolcore Courtyard 黑盒视觉验收已通过，可以进入 AOV-Correct-3。
 
-### AOV-Correct-3：方差与边缘停止函数
+### AOV-Correct-3：方差与边缘停止函数（实现完成，等待黑盒验收，2026-07-18）
 
 目标：让滤波强度由噪声和几何连续性决定。
 
-- 累积亮度矩与方差；
-- Normal 权重允许归零；
-- Depth 权重加入 gradient 与 step；
-- hit/miss、coverage 和 material class 参与硬边界判断；
-- HDR 高能邻居使用方差驱动的鲁棒传播权重；
-- 保留 3×3 kernel，先隔离权重语义的收益。
+已实现：
 
-门禁：
+- Film 在原有逐 sample Beauty 运行平均旁，以 Welford 在线算法累积亮度均值与 `M2`，可分别读取 sample variance 和 mean variance；`clear()` 与 `set()` 同步重置统计；
+- 方差统计使用与 Beauty 完全相同的 `Film:addSample()` 数据流，不增加场景求交，也不参与或改变 radiance；
+- 颜色停止权重结合中心/邻居的亮度均值方差、亮度差与 RGB 差，不再只依赖固定颜色阈值；
+- Normal 使用硬截止加幂次衰减，夹角超过门限时权重可精确归零，移除了原先固定 15% 泄漏；
+- Depth 先估计局部 cardinal gradient，再按实际邻域空间距离（包含 À-Trous step）缩放容差；超出容差时权重精确归零；
+- hit/miss、coverage 与 material class 作为硬边界：miss、class 不同或 coverage 差异过大的邻居不参与过滤；
+- HDR 高能邻居依据局部方差与中心亮度降低传播权重，不修改高能中心样本，不对原始 Film 执行 firefly clamp；
+- 继续只过滤 `diffuse` 和 `glossy`；`delta_transmission` 水面以及其他受保护 class 仍逐通道精确直通，因此本阶段不会把水面变亮，也不承诺显著降低水面自身的 delta 噪声；
+- 保留 3×3 kernel 与现有迭代预算，避免把权重语义收益和 Correct-4 的 kernel 成本实验混在一起；
+- 自动回归已覆盖亮度矩/方差、clear 重置、Normal/Depth/coverage 硬停止、HDR 邻居传播上限、滤波不修改 Film，以及全部 Correct-1/2 既有门禁；
+- Lua LSP 全工作区 0 Error；RayTracer 脚本输出 `[RayTracerTests] all tests passed`；官方项目构建成功。
+
+自动门禁已通过：
+
+- 正交 Normal、显著 Depth 跳变和 coverage 跳变均不能污染中心像素；
+- `50.0` 亮度 HDR 邻居不会把 `0.1` 中心扩散到 `0.2` 以上；
+- 过滤前后源 Film RGB 逐通道完全一致；
+- Dielectric 直通与 Beauty/AOV 接口隔离回归继续通过。
+
+待黑盒门禁：
 
 - 水面、白墙和地面指定区域的滤波前后线性平均亮度漂移受控；
 - 强边缘梯度保留率不低于纠偏前基线；
-- 高亮噪点不会扩散成大面积 Clamp 白块。
+- 高亮噪点不会扩散成大面积 Clamp 白块；
+- Preview 交互与显示刷新成本仍处于可接受范围。
+
+#### Correct-3 首轮黑盒结果：未通过（2026-07-18）
+
+对比 Correct-3 前后的 Poolcore Courtyard 截图后确认：
+
+- 彩球和部分几何边缘更锐利，说明 Normal/class/coverage 的保守停止方向有效；
+- 右侧墙面出现沿屏幕 Y 轴延伸的竖向分带；
+- 地面和侧边平台出现沿屏幕 X 轴延伸的横向分带；
+- 水面噪声基本保持不变，这是 `delta_transmission` 精确直通的预期结果，不属于本次条纹事故；
+- 新增条纹属于不可接受的结构化滤波伪影，因此 Correct-3 不能按当前状态完成，也不能直接进入 Correct-4。
+
+根因分析：
+
+- 首要嫌疑是首版 Depth stopping：每像素只保存一个无方向的最大 cardinal depth gradient，再按空间距离放大 tolerance；超过 tolerance 后权重突然归零；
+- 平面透视深度在屏幕上具有明确方向：墙面主要沿 X 改变，错误接受/拒绝边界表现为竖纹；地面主要沿 Y 改变，对应表现为横纹；
+- `step=2/4` 的 À-Trous 跳格采样会把离散权重差放大为可见分带；
+- 未预滤波的 per-pixel mean variance 可能进一步放大相邻像素滤波强度差，但更可能产生不规则斑块，不足以单独解释当前方向明确的条纹；
+- Normal cutoff、coverage/class 边界、显示放大和原始路径采样均不是同一平面内部规则条纹的首要解释；Correct-3 未改变路径采样，且回归已确认滤波不会写回 Film。
+
+#### AOV-Correct-3.1：方向深度停止修复
+
+执行顺序固定如下，避免把多个变量混在一起：
+
+1. 保持 Film、方差、Normal、coverage/class、HDR、3×3 kernel 和迭代预算不变，只替换 Depth stopping；
+2. 将无方向 `depthGradient` 改为屏幕空间 `depthGradientX/depthGradientY`；
+3. 对邻居偏移 `(dx, dy)` 预测同一平面允许的深度变化，比较实际深度差与方向预测值的残差；
+4. 使用连续的高斯式残差衰减，替代平面内部容易发生的突然归零；真正的大深度断层仍允许硬停止；
+5. 自动测试同时覆盖“斜平面连续过滤”和“真实深度断层隔离”，防止只修复截图却放松几何边界；
+6. 修复后仍保留 3×3 kernel，重新执行同场景黑盒验收；
+7. 只有残余不规则斑块仍明显时，才单独评估 variance 3×3 预滤波；
+8. Correct-3.1 黑盒通过后才进入 Correct-4 的 3×3/5×5 kernel 对比。
+
+实现与自动门禁状态（2026-07-18）：
+
+- 已将无方向最大深度梯度替换为 `depthGradientX/depthGradientY`；内部像素采用中心差分，单侧可用时采用前向或后向差分；
+- 邻居 Depth 权重现在比较实际深度变化与方向梯度预测值的残差；
+- 同一透视平面使用连续高斯式残差衰减，不再在基础 tolerance 边缘突然归零；
+- 残差超过 `4 sigma` 时仍硬停止，保留真实几何断层隔离；
+- 自动回归新增水平深度平面与垂直深度平面测试：其三轮滤波中心结果必须与等深平面一致，分别防止墙面竖纹和地面横纹；
+- Correct-3 的大深度断层、Normal、coverage、HDR、Film 不变、Dielectric 直通与 Beauty 隔离测试继续通过；
+- Lua LSP 全工作区 0 Error；RayTracer 脚本输出 `[RayTracerTests] all tests passed`；官方项目构建成功；
+- Poolcore Courtyard 同预设黑盒复验与截图量化已通过，Correct-3.1 和 Correct-3 正式完成。
+
+最终黑盒与量化结论（2026-07-18）：
+
+- Correct-3.1 当前图与 Correct-3 前基线肉眼接近，符合本阶段“修正权重语义、亮度稳定优先，不追求最平滑”的目标；
+- 对齐截图后，全图平均亮度变化约 `-0.008/255`，建筑区域约 `+0.039/255`，左右墙约 `+0.247/-0.101`，未出现可感知整体提亮或压暗；
+- 天空区域近乎逐像素一致，变化集中于实际参与过滤的几何区域，排除了全局显示链路漂移；
+- 相比出现条纹的首版 Correct-3，低频偏差在左墙、右墙和侧地面分别下降约 `31%`、`47%`、`66%`，竖纹与横纹事故已消除至基线附近；
+- 当前墙面高频颗粒指标相对 Correct-3 前约降低 `3%～5%`，侧地面基本持平；收益保守但为实质变化，不是滤波失效；
+- 水面保持 `delta_transmission` 直通，因此噪声与 Correct-3 前接近，且未重新出现整体变亮；
+- 未观察到新的跨材质泄漏、强边缘模糊、HDR 白块或结构化条纹；Correct-3 的实现、自动回归和视觉门禁均通过。
+
+明确保留、不回退的 Correct-3 内容：
+
+- Film Welford 亮度矩与方差；
+- Normal 权重允许归零；
+- class、coverage 与 hit/miss 硬边界；
+- HDR 高能邻居鲁棒传播；
+- Dielectric 与其他受保护 class 精确直通；
+- 显示滤波不修改原始 Film。
 
 ### AOV-Correct-4：kernel 与质量/成本重测
 
@@ -428,6 +504,9 @@ Clamp / Image / Texture2D
 - 当前 AOV A-Trous 原型保留为问题复现和差分基线，不作为可信完成态；
 - `AOV-Correct-1` 已完成：AOV sample 累积、有效命中平均、coverage 和调度一致性测试均已落地；
 - `AOV-Correct-2` 已完成：材质分类、delta/emission 保守直通、Beauty/AOV 接口解耦、自动化回归与 Poolcore Courtyard 黑盒视觉门禁均已通过；
-- 下一开发阶段固定为 `AOV-Correct-3`：引入亮度方差与更严格的边缘停止函数；
-- 完整 lobe 拆分、Albedo demodulation 和 5×5 kernel 均后置，不阻塞首轮纠偏；
-- 在 AOV-Correct-1～3 完成前，不继续通过放宽颜色权重或增加滤波轮数追求更平滑画面。
+- `AOV-Correct-3` 首版黑盒曾因无方向 Depth hard-stop 产生墙面竖纹与地面横纹；
+- `AOV-Correct-3.1` 已以方向深度梯度残差修复该问题，自动回归、截图量化与 Poolcore Courtyard 黑盒均已通过；Correct-3 正式完成；
+- 下一阶段为 `AOV-Correct-4`：比较 3×3 与 5×5 B3-spline 的质量/成本；
+- 完整 lobe 拆分、Albedo demodulation 均后置，不阻塞首轮纠偏；
+- Inspector 在渲染完成后切换 denoise 不主动刷新显示的既有行为按当前决策暂不修改；
+- Correct-4 继续以亮度稳定和材质可信为首要门禁，不通过放宽权重或增加轮数单纯追求平滑。
