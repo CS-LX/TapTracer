@@ -12,6 +12,10 @@ function DiffuseLight.new(emitTexture, intensity)
     }, DiffuseLight)
 end
 
+function DiffuseLight:albedoAt(record)
+    return self.emitTexture:value(record)
+end
+
 function DiffuseLight:emitted(record)
     if record.frontFace == false then
         return Vec3.new(0, 0, 0)

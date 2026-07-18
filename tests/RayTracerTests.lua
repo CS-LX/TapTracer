@@ -314,6 +314,7 @@ local function testMaterials()
     local glassRay, glassAttenuation = glass:scatter(incoming, record, RT.RNG.new(5))
     assert(glassRay ~= nil, "Dielectric should scatter")
     assertVectorNear(glassAttenuation, Vec3.new(1, 1, 1), 1e-8, "Dielectric attenuation")
+    assertVectorNear(glass:albedoAt(record), Vec3.new(1, 1, 1), 1e-8, "Dielectric AOV albedo")
     assertNear(glassRay.direction:length(), 1, 1e-8, "Dielectric direction length")
 end
 
@@ -464,6 +465,7 @@ local function testLightingAndTextures()
 
     local light = RT.DiffuseLight.new(red, 3.0)
     local lightRecord = { point = Vec3.new(0, 0, 0), frontFace = true }
+    assertVectorNear(light:albedoAt(lightRecord), Vec3.new(0.8, 0.1, 0.05), 1e-8, "light AOV albedo")
     assertVectorNear(light:emitted(lightRecord), Vec3.new(2.4, 0.3, 0.15), 1e-8, "emitted color")
     lightRecord.frontFace = false
     assertVectorNear(light:emitted(lightRecord), Vec3.new(0, 0, 0), 1e-8, "back face emission")

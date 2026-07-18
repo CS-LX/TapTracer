@@ -103,7 +103,7 @@ end
 ---@param scene table
 ---@param rng table
 ---@return table|nil
-function PathIntegrator:trace(ray, scene, rng)
+function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
     local integrator = self
     local stats = integrator.stats
     stats.pathCount = stats.pathCount + 1
@@ -121,6 +121,9 @@ function PathIntegrator:trace(ray, scene, rng)
     for depth = 1, maxDepth do
         stats.bounceCount = stats.bounceCount + 1
         local record = scene:hit(currentRay, Interval.new(0.001, math.huge))
+        if depth == 1 and onPrimaryHit ~= nil then
+            onPrimaryHit(record)
+        end
         if record == nil then
             stats.missCount = stats.missCount + 1
             local unitDirection = currentRay.direction:unit()

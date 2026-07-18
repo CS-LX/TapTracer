@@ -21,6 +21,10 @@ function Dielectric:emitted(_)
     return Vec3.new(0, 0, 0)
 end
 
+function Dielectric:albedoAt(_)
+    return Vec3.new(1, 1, 1)
+end
+
 function Dielectric:scatter(ray, record, rng)
     local attenuation = Vec3.new(1, 1, 1)
     local ratio = record.frontFace and (1 / self.refractionIndex) or self.refractionIndex

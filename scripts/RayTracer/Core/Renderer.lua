@@ -43,6 +43,8 @@ Renderer.__index = Renderer
 
 local Vec3 = require "RayTracer.Math.Vec3"
 local Film = require "RayTracer.Core.Film"
+local Interval = require "RayTracer.Math.Interval"
+local PrimaryAOV = require "RayTracer.Display.PrimaryAOV"
 local RNG = require "RayTracer.Math.RNG"
 
 local function deriveSampleSeed(baseSeed, pixelIndex, sampleIndex)
@@ -110,6 +112,7 @@ function Renderer.new(options)
         scene = options.scene,
         integrator = options.integrator,
         film = options.film or Film.new(width, height),
+        aov = options.aov or PrimaryAOV.new(width, height),
         width = width,
         height = height,
         samplesPerPixel = samplesPerPixel,
@@ -150,6 +153,7 @@ end
 
 function Renderer:reset()
     self.film:clear()
+    self.aov:clear()
     self.nextTile = 1
     self.completedTiles = 0
     self.completedPasses = 0
@@ -233,12 +237,30 @@ function Renderer:getStats()
     }
 end
 
+local function getPrimaryAlbedo(material, record)
+    if material ~= nil and type(material.albedoAt) == "function" then
+        return material:albedoAt(record)
+    end
+    return Vec3.new(1, 1, 1)
+end
+
 function Renderer:renderPixel(pixelIndex, sampleIndex)
     local x = pixelIndex % self.width
     local y = math.floor(pixelIndex / self.width)
     local rng = RNG.new(deriveSampleSeed(self.seed, pixelIndex, sampleIndex))
     local ray = self.camera:getRay(x, y, rng)
-    local color = self.integrator:trace(ray, self.scene, rng)
+    local color = self.integrator:trace(ray, self.scene, rng, function(primaryRecord)
+        if primaryRecord ~= nil and primaryRecord.material ~= nil then
+            self.aov:set(x, y, {
+                hit = true,
+                albedo = getPrimaryAlbedo(primaryRecord.material, primaryRecord),
+                normal = primaryRecord.normal,
+                depth = primaryRecord.t,
+            })
+        else
+            self.aov:set(x, y, nil)
+        end
+    end)
     self.film:addSample(x, y, color)
     self.totalSamples = self.totalSamples + 1
     self.totalRays = self.totalRays + 1

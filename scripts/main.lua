@@ -1,6 +1,10 @@
 local RayTracer = require "RayTracer"
 local QualityPresets = require "RayTracer.Config.QualityPresets"
 local DisplayDenoise = require "RayTracer.Display.DisplayDenoise"
+local PrimaryAOV = require "RayTracer.Display.PrimaryAOV"
+local AOVAtrous = require "RayTracer.Display.AOVAtrous"
+local RenderController = require "RayTracer.Runtime.RenderController"
+local InspectorUI = require "RayTracer.UI.InspectorUI"
 local UI = require("urhox-libs/UI")
 
 local ACTIVE_QUALITY = "preview"
@@ -17,7 +21,16 @@ local CONFIG = {
     maxTilesPerStep = ACTIVE_PRESET.maxTilesPerStep,
     maxDepth = ACTIVE_PRESET.maxDepth or 8,
     denoise = true,
+    denoiseIterations = 3,
 }
+
+local function copyConfig(config)
+    local result = {}
+    for key, value in pairs(config) do
+        result[key] = value
+    end
+    return result
+end
 
 ---@type table|nil
 local camera_ = nil
@@ -26,7 +39,10 @@ local scene_ = nil
 ---@type table|nil
 local renderer_ = nil
 ---@type table|nil
-local frame_ = nil
+local renderController_ = nil
+local displayFrame_ = nil
+local displayFramePass_ = 0
+local renderConfig_ = copyConfig(CONFIG)
 ---@type NVGContextWrapper|nil
 local vg_ = nil
 ---@type Label|nil
@@ -48,6 +64,8 @@ local displayFilterSeconds_ = 0
 local displayFilterPixels_ = 0
 local pendingDisplayUpload_ = false
 local reportedComplete_ = false
+local INSPECTOR_RESERVED_WIDTH = 278
+local DISPLAY_MARGIN = 24
 
 local function addBox(scene, minimum, maximum, material)
     local Vec3 = RayTracer.Vec3
@@ -94,6 +112,19 @@ local function addBox(scene, minimum, maximum, material)
         Vec3.new(0, 0, maxZ - minZ),
         material
     ))
+end
+
+local function buildCamera(config)
+    local Vec3 = RayTracer.Vec3
+    camera_ = RayTracer.Camera.new {
+        aspectRatio = config.width / config.height,
+        imageWidth = config.width,
+        verticalFov = 55,
+        lookFrom = Vec3.new(0, 3.6, -8.5),
+        lookAt = Vec3.new(0, 2.0, 7.0),
+        up = Vec3.new(0, 1, 0),
+        defocusAngle = 0,
+    }
 end
 
 local function buildScene()
@@ -189,30 +220,91 @@ local function buildScene()
     }
 end
 
-local function buildRenderer()
+local function buildRenderer(config)
     renderer_ = RayTracer.Renderer.new {
         camera = camera_,
         scene = scene_,
-        width = CONFIG.width,
-        height = CONFIG.height,
-        samplesPerPixel = CONFIG.samplesPerPixel,
-        maxDepth = CONFIG.maxDepth,
+        width = config.width,
+        height = config.height,
+        samplesPerPixel = config.samplesPerPixel,
+        maxDepth = config.maxDepth,
         tileSize = 8,
-        tileWidth = CONFIG.progressiveChunkWidth,
-        tileHeight = CONFIG.progressiveChunkHeight,
+        tileWidth = config.progressiveChunkWidth,
+        tileHeight = config.progressiveChunkHeight,
         seed = 42,
         timeProvider = function()
             return GetTime():GetElapsedTime()
         end,
         integrator = RayTracer.PathIntegrator.new {
-            maxDepth = CONFIG.maxDepth,
+            maxDepth = config.maxDepth,
             background = RayTracer.Vec3.new(0.16, 0.42, 0.92),
         },
     }
+    return renderer_
 end
 
 local function encodeDisplayChannel(value)
     return math.max(0, math.min(1, value))
+end
+
+local function setConfig(config)
+    local snapshot = copyConfig(config)
+    for key in pairs(renderConfig_) do
+        renderConfig_[key] = nil
+    end
+    for key, value in pairs(snapshot) do
+        renderConfig_[key] = value
+    end
+    CONFIG.quality = renderConfig_.quality
+    CONFIG.width = renderConfig_.width
+    CONFIG.height = renderConfig_.height
+    CONFIG.samplesPerPixel = renderConfig_.samplesPerPixel
+    CONFIG.progressiveChunkWidth = renderConfig_.progressiveChunkWidth
+    CONFIG.progressiveChunkHeight = renderConfig_.progressiveChunkHeight
+    CONFIG.maxTilesPerStep = renderConfig_.maxTilesPerStep
+    CONFIG.maxDepth = renderConfig_.maxDepth
+    CONFIG.denoise = renderConfig_.denoise
+    CONFIG.denoiseIterations = renderConfig_.denoiseIterations or 3
+end
+
+local function applyPreset(name)
+    local preset = QualityPresets.get(name)
+    local config = copyConfig(CONFIG)
+    for key, value in pairs(preset) do
+        config[key] = value
+    end
+    config.quality = name
+    setConfig(config)
+end
+
+local function updateDisplayFromFrame(frame, iterations)
+    if frame == nil or displayImage_ == nil or renderer_ == nil then
+        return
+    end
+    local displayFrame = frame
+    local filterStart = GetTime():GetElapsedTime()
+    if CONFIG.denoise then
+        displayFrame = AOVAtrous.filter(frame, renderer_.aov, iterations)
+    end
+    local width = CONFIG.width
+    local height = CONFIG.height
+    for row = 0, height - 1 do
+        for column = 0, width - 1 do
+            local r, g, b = displayFrame:get(column, row)
+            displayImage_:SetPixel(column, row, Color(
+                encodeDisplayChannel(r),
+                encodeDisplayChannel(g),
+                encodeDisplayChannel(b),
+                1.0
+            ))
+        end
+    end
+    if CONFIG.denoise then
+        displayFilterSeconds_ = displayFilterSeconds_
+            + math.max(0, GetTime():GetElapsedTime() - filterStart)
+        displayFilterPixels_ = displayFilterPixels_ + width * height
+    end
+    pendingDisplayUpload_ = true
 end
 
 local function buildDisplayTexture()
@@ -229,8 +321,9 @@ local function buildDisplayTexture()
     displayCanvas_ = BorderImage:new()
     displayCanvas_:SetTexture(displayTexture_)
     displayCanvas_:SetImageRect(IntRect(0, 0, CONFIG.width, CONFIG.height))
-    displayCanvas_:SetPriority(-100)
-    ui.root:AddChild(displayCanvas_)
+    displayCanvas_:SetPriority(-1000000)
+    displayCanvas_:SetBringToBack(true)
+    ui.root:InsertChild(0, displayCanvas_)
     displayedPixels_ = 0
     displayUploadSeconds_ = 0
     displayUploadCount_ = 0
@@ -242,6 +335,21 @@ local function buildDisplayTexture()
         CONFIG.width,
         CONFIG.height
     ))
+end
+
+local function resetDisplayTexture()
+    if displayImage_ == nil or displayTexture_ == nil or displayCanvas_ == nil then
+        return
+    end
+    displayImage_:SetSize(CONFIG.width, CONFIG.height, 4)
+    displayImage_:Clear(Color(0.02, 0.03, 0.05, 1.0))
+    displayTexture_:SetData(displayImage_, false)
+    displayCanvas_:SetTexture(displayTexture_)
+    displayCanvas_:SetImageRect(IntRect(0, 0, CONFIG.width, CONFIG.height))
+    displayedPixels_ = 0
+    displayFrame_ = nil
+    displayFramePass_ = 0
+    pendingDisplayUpload_ = false
 end
 
 local function uploadDisplayTexture()
@@ -261,7 +369,7 @@ end
 
 local function updateDisplayTile(tile)
     local image = displayImage_
-    local frame = frame_
+    local frame = displayFrame_
     if image == nil or frame == nil or tile == nil then
         return
     end
@@ -320,9 +428,11 @@ local function layoutDisplayCanvas()
     local dpr = math.max(1, graphics:GetDPR())
     local logicalW = physicalW / dpr
     local logicalH = physicalH / dpr
-    local imageWidth = math.min(logicalW - 48, logicalH * 1.65)
+    local availableWidth = math.max(160, logicalW - INSPECTOR_RESERVED_WIDTH - DISPLAY_MARGIN * 2)
+    local availableHeight = math.max(90, logicalH - 150)
+    local imageWidth = math.min(availableWidth, availableHeight * CONFIG.width / CONFIG.height)
     local imageHeight = imageWidth * CONFIG.height / CONFIG.width
-    local imageLeft = (logicalW - imageWidth) * 0.5
+    local imageLeft = DISPLAY_MARGIN + (availableWidth - imageWidth) * 0.5
     local imageTop = math.max(56, (logicalH - imageHeight) * 0.5)
 
     canvas:SetPosition(
@@ -470,11 +580,59 @@ function Start()
         return
     end
 
+    applyPreset(ACTIVE_QUALITY)
     buildUI()
     buildDisplayTexture()
     layoutDisplayCanvas()
     buildScene()
-    buildRenderer()
+    buildCamera(renderConfig_)
+    renderController_ = RenderController.new {
+        config = renderConfig_,
+        createRenderer = function(config)
+            return buildRenderer(config)
+        end,
+    }
+    local inspectorPanel = InspectorUI.build(UI, {
+        state = renderConfig_,
+        getPreset = function(name)
+            return QualityPresets.get(name)
+        end,
+        onConfigChanged = function(config)
+            local previousWidth = CONFIG.width
+            local previousHeight = CONFIG.height
+            setConfig(config)
+            buildCamera(renderConfig_)
+            if previousWidth ~= CONFIG.width or previousHeight ~= CONFIG.height then
+                resetDisplayTexture()
+            end
+            layoutDisplayCanvas()
+            if statusLabel_ ~= nil then
+                statusLabel_:SetText(string.format(
+                    "待机 · %s · %dx%d · %d spp",
+                    CONFIG.quality,
+                    CONFIG.width,
+                    CONFIG.height,
+                    CONFIG.samplesPerPixel
+                ))
+            end
+        end,
+        onStart = function(status)
+            if renderController_:start() then
+                renderer_ = renderController_:getRenderer()
+                reportedComplete_ = false
+                displayFrame_ = nil
+                displayFramePass_ = 0
+                status:SetText("已开始绘制")
+            else
+                status:SetText("绘制正在进行")
+            end
+        end,
+        onStop = function(status)
+            renderController_:stop()
+            status:SetText("已终止绘制")
+        end,
+    })
+    uiRoot_:AddChild(inspectorPanel)
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent(vg_, "NanoVGRender", "HandleRender")
     SubscribeToEvent("ScreenMode", "HandleScreenMode")
@@ -490,52 +648,50 @@ end
 ---@param eventType string
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
-    local renderer = renderer_
+    local controller = renderController_
     local statusLabel = statusLabel_
     local progressBar = progressBar_
-    if renderer == nil or statusLabel == nil or progressBar == nil then
+    if controller == nil or statusLabel == nil or progressBar == nil then
         return
     end
 
-    if not renderer:isComplete() then
-        renderer:step(CONFIG.maxTilesPerStep)
-        frame_ = renderer.film
-        local stats = renderer:getStats()
-        local progress = stats.progress
-        local tile = renderer.lastTile
-        updateDisplayTile(tile)
-        if pendingDisplayUpload_ then
-            uploadDisplayTexture()
+    if controller:isRunning() then
+        local renderer = controller:update(CONFIG.maxTilesPerStep)
+        renderer_ = renderer
+        if renderer ~= nil then
+            displayFrame_ = renderer.film
+            local stats = renderer:getStats()
+            local progress = stats.progress
+            local pass = math.min(CONFIG.samplesPerPixel, stats.currentPass)
+            local passProgress = stats.totalPixels > 0
+                and stats.completedPassPixels / stats.totalPixels or 0
+            statusLabel:SetText(string.format(
+                "逐轮累积中 · 第 %d/%d 轮 · 当前轮 %.1f%% · 总进度 %.1f%%",
+                pass,
+                CONFIG.samplesPerPixel,
+                passProgress * 100,
+                progress * 100
+            ))
+            progressBar:SetValue(progress)
+
+            if displayFramePass_ ~= stats.completedPasses then
+                displayFramePass_ = stats.completedPasses
+                updateDisplayFromFrame(displayFrame_, CONFIG.denoiseIterations)
+            end
+            if pendingDisplayUpload_ then
+                uploadDisplayTexture()
+            end
         end
-        local pass = math.min(CONFIG.samplesPerPixel, stats.currentPass)
-        local passProgress = stats.completedPassPixels / stats.totalPixels
-        statusLabel:SetText(string.format(
-            "逐轮累积中 · 第 %d/%d 轮 · 当前轮 %.1f%% · 总进度 %.1f%%",
-            pass,
-            CONFIG.samplesPerPixel,
-            passProgress * 100,
-            progress * 100
-        ))
-        progressBar:SetValue(progress)
-    elseif not reportedComplete_ then
-        frame_ = renderer.film
-        updateDisplayTile(renderer.lastTile)
+    elseif renderer_ ~= nil and renderer_:isComplete() and not reportedComplete_ then
+        displayFrame_ = renderer_.film
+        updateDisplayFromFrame(displayFrame_, CONFIG.denoiseIterations)
         if pendingDisplayUpload_ then
             uploadDisplayTexture()
         end
         statusLabel:SetText("渲染完成 · Poolcore Courtyard")
         progressBar:SetValue(1)
         reportedComplete_ = true
-        local accelerator = scene_ and scene_:getAccelerator()
-        if accelerator then
-            local stats = accelerator:getStats()
-            print(string.format(
-                "[RayTracer] BVH traversal: %d box tests, %d primitive tests",
-                stats.boxTests,
-                stats.primitiveTests
-            ))
-        end
-        printRenderStats(renderer)
+        printRenderStats(renderer_)
         print("[RayTracer] render complete")
     end
 end

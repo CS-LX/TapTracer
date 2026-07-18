@@ -620,9 +620,32 @@ job:GetStats()
 - 开关降噪不改变 Film 和采样统计；
 - PPM、ANSI、Callback 仍读取未经显示滤波的 Film。
 
+#### H-Preview-3A：AOV 降噪语义纠偏（当前下一步）
+
+最新自查确认，后续加入的 Albedo/Normal/Depth 多尺度滤波原型与业界常见 AOV/À-Trous/SVGF 语义存在偏差，已在 Dielectric 水面上观察到明显亮度漂移。该问题不是普通参数调节问题；在纠偏完成前，多尺度 AOV 输出只作为问题复现基线，不作为可信 Preview 完成态。
+
+完整偏差清单、纯 Lua 可行性、替代方案、分阶段路线和量化验收门禁见：
+
+- [`aov-denoising-correction.md`](aov-denoising-correction.md)
+
+执行顺序固定为：
+
+1. `AOV-Correct-1`：AOV 按与 Beauty 相同的 sample 序列累积，并记录 hit coverage；
+2. `AOV-Correct-2`：加入材质分类和 delta/specular 保守策略，优先消除水面提亮；
+3. `AOV-Correct-3`：加入方差、可归零 Normal 权重、Depth gradient/step 和 HDR 高能样本鲁棒传播；
+4. `AOV-Correct-4`：语义稳定后才比较 3×3 与标准 5×5 B3-spline kernel；
+5. `AOV-Correct-5`：仅在保守方案不足时评估完整 diffuse/specular/transmission lobe 拆分与 Albedo demodulation。
+
+门禁原则：
+
+- 修复只能作用于 AOV 和显示副本，禁止修改线性 HDR Film；
+- 开关降噪时路径、Film 和 BVH 统计必须一致；
+- 默认 Preview 优先保持亮度和材质可信，不以最平滑为目标；
+- 不能通过门禁的 Dielectric 方案回退为弱 step=1 或完全直通，不允许保留大面积亮度漂移。
+
 #### H-Preview-4：质量档位重测
 
-完成 H-Preview-1～3 后，再根据实际数据决定：
+完成 H-Preview-1～3 及 H-Preview-3A 的 AOV 语义纠偏后，再根据实际数据决定：
 
 - `preview` 目标固定为 `32 spp`，不再在 H-Preview-4 中重新降回 8 spp；
 - `preview` 是否使用 `maxDepth=5/6`；
