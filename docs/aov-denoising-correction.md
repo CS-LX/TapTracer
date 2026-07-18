@@ -499,14 +499,58 @@ Clamp / Image / Texture2D
 - 降噪显示成本与路径积分成本分开统计；
 - 默认方案以亮度稳定和材质可信为先，不以最平滑为先。
 
-### AOV-Correct-5：可选 lobe 评估
+### AOV-Correct-5：transmission 最小诊断（等待黑盒数据，2026-07-18）
 
-目标：只在保守策略仍不能满足 Preview 时评估更大改造。
+目标：先确认水面噪声的路径构成和终止去向，再决定是否值得实现 transmission 专项显示候选；在收益未知前不拆完整 lobe Film。
 
-- 评估独立 diffuse/specular/transmission Film；
-- 只有独立 diffuse lobe 存在时才评估 Albedo demodulation；
-- 测量内存、积分器复杂度、组合正确性和真实视觉收益；
-- 收益不足则明确停止，不为追求“行业完整度”强行实现。
+黑盒日志路径约束：
+
+- TapTap Preview 的 Web 运行日志必须优先从 `/opt/log/dev/Web(Win32)_p_6lvc_1.0.0_user_script.log` 读取；
+- 同一日志的索引记录位于 `/opt/log/runtime_index/current.jsonl`，可按 `filename`、`topic=user_script` 和 `projectId=p_6lvc` 定位；
+- `/opt/log/dev/user_script.log` 是同一 user script 日志的简短入口；
+- `/home/Maker/logs/lua/` 仅作为本地 UrhoXRuntime/validate 运行记录，不是 TapTap Preview 完整渲染统计的首选来源；
+- 完整渲染完成后，应在上述 Web 日志中查找 `[RayTracer][H5]` 两行以及紧邻的 `[RayTracer] render complete`，不要仅依据 `[RayTracer] started` 判断渲染完成；
+- 本约束适用于后续所有 H5 黑盒验收，除非 Preview 平台、项目 ID 或日志文件名发生变化。
+
+已实现的最小诊断：
+
+- `Dielectric:scatter()` 增加第四个只读返回值，标记本次 Fresnel 选择为 `reflection` 或 `transmission`；原有方向、衰减、specular 标记和随机数调用顺序不变，旧的三返回值调用继续兼容；
+- `PathIntegrator` 仅复用路径追踪过程中已经得到的 hit，统计主射线首次命中 `delta_transmission` 后的分支和去向，不增加任何 `scene:hit()`；
+- 分支统计：主 transmission 总数、Fresnel reflection 数、refraction 数，以及缺少分支元数据的数量；
+- 去向统计：沿连续 delta 链找到的首次 diffuse、glossy、emission、其他非 delta 命中，或 sky、Russian Roulette、scatter stop、depth limit 终止；
+- 每条主 transmission 路径最多进入一个去向桶；日志额外输出 `unresolved`，用于发现统计未闭合；
+- 渲染完成时输出两行 `[RayTracer][H5]`，不新增 Inspector 开关，不改变 Correct-4 默认 `3×3 + 3轮`；
+- 本阶段不创建 diffuse/specular/transmission Film，不过滤 `delta_transmission`，不修改 Beauty Film、Primary AOV 或显示结果。
+
+自动回归：
+
+- 强制覆盖 Dielectric Fresnel reflection 与 refraction，并校验事件标签、方向、衰减和 specular 契约；
+- 覆盖主 transmission 的首次 diffuse、sky 和 depth-limit 分类；
+- 用兼容旧三返回值的 Dielectric 包装与新诊断路径比较，确认相同随机输入下 Beauty RGB 完全一致；
+- Correct-1～4 既有断言继续输出 `[RayTracerTests] all tests passed`；Lua LSP 全工作区 0 Error；官方项目构建成功。
+
+黑盒辅助步骤：
+
+1. Inspector 保持 `Preview / 256×144 / 32 spp / maxDepth 6`；
+2. 保持 denoise 开启、kernel=`3×3`、iterations=`3`，不要在本次诊断中切换其他参数；
+3. 点击开始并等待完整渲染，不要中途终止；
+4. 从日志复制两行 `[RayTracer][H5]`；如水面观感与此前明显不同，再附一张完整截图；
+5. 重点检查 `unclassifiedBranch=0` 与 `unresolved=0`。若不为零，先修统计闭合，不进入过滤原型。
+
+候选决策门禁：
+
+- 只有当 refraction 后首次命中 diffuse/glossy 的路径占比足够高，且水面噪声明显来自可稳定引导的后续表面时，才评估弱 transmission 显示候选；
+- 若 sky、连续 delta 或 depth-limit 占主导，Primary AOV 不足以安全约束空间传播，应停止弱过滤并等待 MIS 或更完整的 lobe/path guidance；
+- 任何候选仍须保持水面平均亮度变化不超过 `5%`、Film 与路径统计完全不变、默认 Dielectric 继续直通；
+- 收益不足则在 Correct-5 停止，不为“完整 lobe 管线”增加无证据复杂度。
+
+暂不实现：
+
+- 独立 diffuse/specular/transmission/emission Film；
+- Albedo demodulation；
+- transmission 默认空间过滤；
+- 额外路径求交或重新追踪；
+- speculative Inspector 选项。
 
 ## 7. 验收与回归指标
 
