@@ -62,6 +62,22 @@ function InspectorUI.build(UI, options)
         },
     }
 
+    local kernelLabel = UI.Label {
+        text = state.denoiseKernel == "5x5"
+            and "5×5 B3-spline"
+            or "3×3 Current",
+        fontSize = 11,
+        height = 22,
+        fontColor = { 190, 214, 232, 255 },
+    }
+
+    local iterationLabel = UI.Label {
+        text = string.format("%d 轮", state.denoiseIterations or 3),
+        fontSize = 11,
+        height = 22,
+        fontColor = { 190, 214, 232, 255 },
+    }
+
     local settings = UI.Panel {
         gap = 4,
         children = {
@@ -99,11 +115,40 @@ function InspectorUI.build(UI, options)
             UI.Label { text = "降噪", fontSize = 11, fontColor = { 170, 190, 210, 255 } },
             UI.Toggle {
                 id = "inspector-denoise",
-                checked = state.denoise,
+                value = state.denoise,
                 onChange = function(_, checked)
                     setValue("denoise", checked)
                 end,
             },
+            UI.Label { text = "A-Trous Kernel", fontSize = 11, fontColor = { 170, 190, 210, 255 } },
+            UI.Toggle {
+                id = "inspector-kernel",
+                label = "启用 5×5",
+                value = state.denoiseKernel == "5x5",
+                onChange = function(_, enabled)
+                    local kernel = enabled and "5x5" or "3x3"
+                    kernelLabel:SetText(enabled
+                        and "5×5 B3-spline"
+                        or "3×3 Current")
+                    setValue("denoiseKernel", kernel)
+                end,
+            },
+            kernelLabel,
+            UI.Label { text = "A-Trous 轮数", fontSize = 11, fontColor = { 170, 190, 210, 255 } },
+            UI.Slider {
+                id = "inspector-denoise-iterations",
+                value = state.denoiseIterations or 3,
+                min = 1,
+                max = 3,
+                step = 1,
+                height = 24,
+                onChange = function(_, value)
+                    local iterations = math.floor(value + 0.5)
+                    iterationLabel:SetText(string.format("%d 轮", iterations))
+                    setValue("denoiseIterations", iterations)
+                end,
+            },
+            iterationLabel,
         },
     }
 

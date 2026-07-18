@@ -22,6 +22,7 @@ local CONFIG = {
     maxDepth = ACTIVE_PRESET.maxDepth or 8,
     denoise = true,
     denoiseIterations = 3,
+    denoiseKernel = "3x3",
 }
 
 local function copyConfig(config)
@@ -62,6 +63,12 @@ local displayUploadSeconds_ = 0
 local displayUploadCount_ = 0
 local displayFilterSeconds_ = 0
 local displayFilterPixels_ = 0
+local displayAOVFilterSeconds_ = 0
+local displayAOVFilterCount_ = 0
+local displayAOVCandidateVisits_ = 0
+local displayAOVAcceptedVisits_ = 0
+local lastAOVFilterSeconds_ = 0
+local lastAOVFilterStats_ = nil
 local pendingDisplayUpload_ = false
 local reportedComplete_ = false
 local INSPECTOR_RESERVED_WIDTH = 278
@@ -265,6 +272,7 @@ local function setConfig(config)
     CONFIG.maxDepth = renderConfig_.maxDepth
     CONFIG.denoise = renderConfig_.denoise
     CONFIG.denoiseIterations = renderConfig_.denoiseIterations or 3
+    CONFIG.denoiseKernel = renderConfig_.denoiseKernel or "3x3"
 end
 
 local function applyPreset(name)
@@ -284,7 +292,24 @@ local function updateDisplayFromFrame(frame, iterations)
     local displayFrame = frame
     local filterStart = GetTime():GetElapsedTime()
     if CONFIG.denoise then
-        displayFrame = AOVAtrous.filter(frame, renderer_.aov, iterations)
+        local aovStart = GetTime():GetElapsedTime()
+        displayFrame = AOVAtrous.filter(frame, renderer_.aov, {
+            iterations = iterations,
+            kernel = CONFIG.denoiseKernel,
+        })
+        local aovSeconds = math.max(
+            0,
+            GetTime():GetElapsedTime() - aovStart
+        )
+        local aovStats = displayFrame.stats or {}
+        lastAOVFilterSeconds_ = aovSeconds
+        lastAOVFilterStats_ = aovStats
+        displayAOVFilterSeconds_ = displayAOVFilterSeconds_ + aovSeconds
+        displayAOVFilterCount_ = displayAOVFilterCount_ + 1
+        displayAOVCandidateVisits_ = displayAOVCandidateVisits_
+            + (aovStats.candidateVisits or 0)
+        displayAOVAcceptedVisits_ = displayAOVAcceptedVisits_
+            + (aovStats.acceptedVisits or 0)
     end
     local width = CONFIG.width
     local height = CONFIG.height
@@ -329,6 +354,12 @@ local function buildDisplayTexture()
     displayUploadCount_ = 0
     displayFilterSeconds_ = 0
     displayFilterPixels_ = 0
+    displayAOVFilterSeconds_ = 0
+    displayAOVFilterCount_ = 0
+    displayAOVCandidateVisits_ = 0
+    displayAOVAcceptedVisits_ = 0
+    lastAOVFilterSeconds_ = 0
+    lastAOVFilterStats_ = nil
     pendingDisplayUpload_ = false
     print(string.format(
         "[RayTracer] live display texture ready: %dx%d",
@@ -563,10 +594,24 @@ local function printRenderStats(renderer)
         displayUploadSeconds_
     ))
     print(string.format(
-        "[RayTracer][H3] denoise=%s filter=%.3fs filteredPixels=%d",
+        "[RayTracer][H4] denoise=%s kernel=%s iterations=%d displayFilter=%.3fs filteredPixels=%d",
         tostring(CONFIG.denoise),
+        CONFIG.denoiseKernel,
+        CONFIG.denoiseIterations,
         displayFilterSeconds_,
         displayFilterPixels_
+    ))
+    local lastStats = lastAOVFilterStats_ or {}
+    print(string.format(
+        "[RayTracer][H4] AOV last=%.3fs taps=%d candidates=%d accepted=%d calls=%d total=%.3fs totalCandidates=%d totalAccepted=%d",
+        lastAOVFilterSeconds_,
+        lastStats.taps or 0,
+        lastStats.candidateVisits or 0,
+        lastStats.acceptedVisits or 0,
+        displayAOVFilterCount_,
+        displayAOVFilterSeconds_,
+        displayAOVCandidateVisits_,
+        displayAOVAcceptedVisits_
     ))
 end
 
@@ -608,16 +653,26 @@ function Start()
             layoutDisplayCanvas()
             if statusLabel_ ~= nil then
                 statusLabel_:SetText(string.format(
-                    "待机 · %s · %dx%d · %d spp",
+                    "待机 · %s · %dx%d · %d spp · %s/%d轮",
                     CONFIG.quality,
                     CONFIG.width,
                     CONFIG.height,
-                    CONFIG.samplesPerPixel
+                    CONFIG.samplesPerPixel,
+                    CONFIG.denoiseKernel,
+                    CONFIG.denoiseIterations
                 ))
             end
         end,
         onStart = function(status)
             if renderController_:start() then
+                displayFilterSeconds_ = 0
+                displayFilterPixels_ = 0
+                displayAOVFilterSeconds_ = 0
+                displayAOVFilterCount_ = 0
+                displayAOVCandidateVisits_ = 0
+                displayAOVAcceptedVisits_ = 0
+                lastAOVFilterSeconds_ = 0
+                lastAOVFilterStats_ = nil
                 renderer_ = renderController_:getRenderer()
                 reportedComplete_ = false
                 displayFrame_ = nil

@@ -1026,6 +1026,107 @@ local function testAOVCorrect31DirectionalDepth()
     )
 end
 
+local function testAOVCorrect4Kernels()
+    local kernel3 = AOVAtrous.getKernelInfo("3x3")
+    local kernel5 = AOVAtrous.getKernelInfo("5x5")
+    assert(kernel3 ~= nil, "3x3 kernel info")
+    assert(kernel5 ~= nil, "5x5 kernel info")
+    assertNear(kernel3.taps, 9, 0, "3x3 kernel taps")
+    assertNear(kernel3.weightSum, 16, 0, "3x3 kernel weight sum")
+    assertNear(kernel5.taps, 25, 0, "5x5 kernel taps")
+    assertNear(kernel5.weightSum, 256, 0, "5x5 B3-spline weight sum")
+    assert(AOVAtrous.getKernelInfo("missing") == nil,
+        "unknown kernel info should be nil")
+
+    local width = 7
+    local height = 7
+    local film = RT.Film.new(width, height)
+    local aov = PrimaryAOV.new(width, height)
+    for y = 0, height - 1 do
+        for x = 0, width - 1 do
+            film:addSample(x, y, Vec3.new(0.25, 0.25, 0.25))
+            aov:set(x, y, {
+                hit = true,
+                class = "diffuse",
+                albedo = Vec3.new(0.5, 0.5, 0.5),
+                normal = Vec3.new(0, 1, 0),
+                depth = 2,
+            })
+        end
+    end
+
+    local filtered3 = AOVAtrous.filter(film, aov, {
+        iterations = 1,
+        kernel = "3x3",
+    })
+    local filtered5 = AOVAtrous.filter(film, aov, {
+        iterations = 1,
+        kernel = "5x5",
+    })
+    assertNear(filtered3.stats.taps, 9, 0, "3x3 result taps")
+    assertNear(filtered5.stats.taps, 25, 0, "5x5 result taps")
+    assertNear(filtered3.stats.candidateVisits, 361, 0,
+        "3x3 candidate visits")
+    assertNear(filtered5.stats.candidateVisits, 841, 0,
+        "5x5 candidate visits")
+    assert(filtered5.stats.candidateVisits
+            > filtered3.stats.candidateVisits,
+        "5x5 must visit more neighbors")
+
+    for y = 0, height - 1 do
+        for x = 0, width - 1 do
+            local r3, g3, b3 = filtered3:get(x, y)
+            local r5, g5, b5 = filtered5:get(x, y)
+            assertNear(r3, 0.25, 1e-12, "3x3 constant red")
+            assertNear(g3, 0.25, 1e-12, "3x3 constant green")
+            assertNear(b3, 0.25, 1e-12, "3x3 constant blue")
+            assertNear(r5, 0.25, 1e-12, "5x5 constant red")
+            assertNear(g5, 0.25, 1e-12, "5x5 constant green")
+            assertNear(b5, 0.25, 1e-12, "5x5 constant blue")
+        end
+    end
+
+    local repeat5 = AOVAtrous.filter(film, aov, {
+        iterations = 1,
+        kernel = "5x5",
+    })
+    local firstR, firstG, firstB = filtered5:get(3, 3)
+    local repeatR, repeatG, repeatB = repeat5:get(3, 3)
+    assertNear(repeatR, firstR, 0, "5x5 deterministic red")
+    assertNear(repeatG, firstG, 0, "5x5 deterministic green")
+    assertNear(repeatB, firstB, 0, "5x5 deterministic blue")
+
+    local protectedFilm = RT.Film.new(5, 1)
+    local protectedAOV = PrimaryAOV.new(5, 1)
+    for x = 0, 4 do
+        local value = x == 2 and 8 or 0.1
+        protectedFilm:addSample(x, 0, Vec3.new(value, value, value))
+        protectedAOV:set(x, 0, {
+            hit = true,
+            class = x == 2 and "delta_transmission" or "diffuse",
+            albedo = Vec3.new(1, 1, 1),
+            normal = Vec3.new(0, 1, 0),
+            depth = 1,
+        })
+    end
+    local protected5 = AOVAtrous.filter(protectedFilm, protectedAOV, {
+        iterations = 3,
+        kernel = "5x5",
+    })
+    local protectedCenter = protected5:get(2, 0)
+    local protectedNeighbor = protected5:get(1, 0)
+    assertNear(protectedCenter, 8, 0,
+        "5x5 protected class must pass through")
+    assertNear(protectedNeighbor, 0.1, 1e-12,
+        "5x5 protected class must not leak")
+
+    local ok = pcall(AOVAtrous.filter, film, aov, {
+        iterations = 1,
+        kernel = "missing",
+    })
+    assert(not ok, "unknown filter kernel should fail")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -1063,6 +1164,7 @@ testPrimaryAOVAccumulation()
 testAOVClassFiltering()
 testAOVCorrect3EdgeStopping()
 testAOVCorrect31DirectionalDepth()
+testAOVCorrect4Kernels()
 testPhaseCRenderer()
 testPresenters()
 testOutput()

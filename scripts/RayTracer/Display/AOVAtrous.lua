@@ -5,11 +5,34 @@ local FILTERABLE_CLASSES = {
     glossy = true,
 }
 
-local KERNEL = {
+local KERNEL_3X3 = {
     { -1, -1, 1 }, { 0, -1, 2 }, { 1, -1, 1 },
     { -1, 0, 2 }, { 0, 0, 4 }, { 1, 0, 2 },
     { -1, 1, 1 }, { 0, 1, 2 }, { 1, 1, 1 },
 }
+
+local function buildSeparableKernel(weights)
+    local kernel = {}
+    local radius = math.floor(#weights * 0.5)
+    for y = -radius, radius do
+        for x = -radius, radius do
+            kernel[#kernel + 1] = {
+                x,
+                y,
+                weights[x + radius + 1]
+                    * weights[y + radius + 1],
+            }
+        end
+    end
+    return kernel
+end
+
+local KERNEL_5X5 = buildSeparableKernel({ 1, 4, 6, 4, 1 })
+local KERNELS = {
+    ["3x3"] = KERNEL_3X3,
+    ["5x5"] = KERNEL_5X5,
+}
+local DEFAULT_KERNEL = "3x3"
 
 local COVERAGE_THRESHOLD = 0.125
 local NORMAL_CUTOFF = 0.7
@@ -221,11 +244,43 @@ local function guidedWeight(centerPixel, samplePixel, centerGuide, sampleGuide,
     return spatialWeight * normal * depth * albedo * color * robust
 end
 
-function AOVAtrous.filter(film, aov, iterations)
+local function resolveOptions(options)
+    if type(options) == "number" or options == nil then
+        return math.max(1, math.floor(options or 2)), DEFAULT_KERNEL
+    end
+    local passes = math.max(1, math.floor(options.iterations or 2))
+    local kernelName = options.kernel or DEFAULT_KERNEL
+    if KERNELS[kernelName] == nil then
+        error("Unknown A-Trous kernel: " .. tostring(kernelName))
+    end
+    return passes, kernelName
+end
+
+function AOVAtrous.getKernelInfo(name)
+    local kernelName = name or DEFAULT_KERNEL
+    local kernel = KERNELS[kernelName]
+    if kernel == nil then
+        return nil
+    end
+    local weightSum = 0
+    for index = 1, #kernel do
+        weightSum = weightSum + kernel[index][3]
+    end
+    return {
+        name = kernelName,
+        taps = #kernel,
+        weightSum = weightSum,
+    }
+end
+
+function AOVAtrous.filter(film, aov, options)
     local width = film.width
     local height = film.height
     local source, guides = buildBuffers(film, aov)
-    local passes = math.max(1, math.floor(iterations or 2))
+    local passes, kernelName = resolveOptions(options)
+    local kernel = KERNELS[kernelName]
+    local candidateVisits = 0
+    local acceptedVisits = 0
 
     for pass = 1, passes do
         local step = 2 ^ (pass - 1)
@@ -243,25 +298,29 @@ function AOVAtrous.filter(film, aov, iterations)
                     local green = 0
                     local blue = 0
                     local totalWeight = 0
-                    for kernelIndex = 1, #KERNEL do
-                        local kernel = KERNEL[kernelIndex]
-                        local sampleX = x + kernel[1] * step
-                        local sampleY = y + kernel[2] * step
+                    for kernelIndex = 1, #kernel do
+                        local kernelTap = kernel[kernelIndex]
+                        local sampleX = x + kernelTap[1] * step
+                        local sampleY = y + kernelTap[2] * step
                         if sampleX >= 0 and sampleX < width
                                 and sampleY >= 0 and sampleY < height then
                             local sampleIndex = pixelIndex(width, sampleX, sampleY)
                             local samplePixel = source[sampleIndex]
-                            local offsetX = kernel[1] * step
-                            local offsetY = kernel[2] * step
+                            candidateVisits = candidateVisits + 1
+                            local offsetX = kernelTap[1] * step
+                            local offsetY = kernelTap[2] * step
                             local weight = guidedWeight(
                                 centerPixel,
                                 samplePixel,
                                 centerGuide,
                                 guides[sampleIndex],
-                                kernel[3],
+                                kernelTap[3],
                                 offsetX,
                                 offsetY
                             )
+                            if weight > 0 then
+                                acceptedVisits = acceptedVisits + 1
+                            end
                             red = red + samplePixel.r * weight
                             green = green + samplePixel.g * weight
                             blue = blue + samplePixel.b * weight
@@ -287,6 +346,13 @@ function AOVAtrous.filter(film, aov, iterations)
         width = width,
         height = height,
         pixels = source,
+        stats = {
+            kernel = kernelName,
+            taps = #kernel,
+            passes = passes,
+            candidateVisits = candidateVisits,
+            acceptedVisits = acceptedVisits,
+        },
         get = function(self, x, y)
             local pixel = self.pixels[pixelIndex(self.width, x, y)]
             return pixel.r, pixel.g, pixel.b
