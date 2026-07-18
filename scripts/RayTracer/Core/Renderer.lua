@@ -56,6 +56,13 @@ local function deriveSampleSeed(baseSeed, pixelIndex, sampleIndex)
     return (value ~ (value >> 16)) & 0xFFFFFFFF
 end
 
+local function deriveBranchSeed(sampleSeed, salt)
+    local value = (sampleSeed ~ salt) & 0xFFFFFFFF
+    value = ((value ~ (value >> 16)) * 0x7FEB352D) & 0xFFFFFFFF
+    value = ((value ~ (value >> 15)) * 0x846CA68B) & 0xFFFFFFFF
+    return (value ~ (value >> 16)) & 0xFFFFFFFF
+end
+
 local function updatePerformanceStats(renderer, computeSeconds, endTime)
     renderer.lastStepSeconds = math.max(0, computeSeconds)
     renderer.elapsedSeconds = renderer.elapsedSeconds + renderer.lastStepSeconds
@@ -258,7 +265,8 @@ end
 function Renderer:renderPixel(pixelIndex, sampleIndex)
     local x = pixelIndex % self.width
     local y = math.floor(pixelIndex / self.width)
-    local rng = RNG.new(deriveSampleSeed(self.seed, pixelIndex, sampleIndex))
+    local sampleSeed = deriveSampleSeed(self.seed, pixelIndex, sampleIndex)
+    local rng = RNG.new(sampleSeed)
     local ray = self.camera:getRay(x, y, rng)
     local transmissionSample = nil
     local color, transmissionColor = self.integrator:trace(
@@ -288,6 +296,12 @@ function Renderer:renderPixel(pixelIndex, sampleIndex)
                 ),
                 normal = transmissionRecord.normal,
                 depth = pathDepth,
+            }
+        end,
+        function()
+            return {
+                reflectionSeed = deriveBranchSeed(sampleSeed, 0xA511E9B3),
+                transmissionSeed = deriveBranchSeed(sampleSeed, 0x63D83595),
             }
         end
     )

@@ -47,18 +47,34 @@ local function makeRecord(material, t)
 end
 
 local function runPath(firstEvent)
-    local glass = makeMaterial("delta_transmission", firstEvent)
     local diffuse = makeMaterial("diffuse", nil)
-    local records = {
-        makeRecord(glass, 1),
-        makeRecord(diffuse, 2),
-    }
+    local reflectionRay = Ray.new(Vec3.new(0, 0, 1), Vec3.new(-1, 0, 0))
+    local transmissionRay = firstEvent == "transmission"
+        and Ray.new(Vec3.new(0, 0, 1), Vec3.new(1, 0, 0)) or nil
+    local glass = makeMaterial("delta_transmission", firstEvent)
+    glass.buildLobes = function()
+        return {
+            attenuation = Vec3.new(1, 1, 1),
+            fresnel = transmissionRay ~= nil and 0.25 or 1,
+            reflectionRay = reflectionRay,
+            transmissionRay = transmissionRay,
+            totalInternalReflection = transmissionRay == nil,
+        }
+    end
+    local primaryRecord = makeRecord(glass, 1)
+    local targetRecord = makeRecord(diffuse, 2)
     local hitCalls = 0
     local scene = {
         lights = {},
-        hit = function()
+        hit = function(_, ray)
             hitCalls = hitCalls + 1
-            return records[hitCalls]
+            if hitCalls == 1 then
+                return primaryRecord
+            end
+            if ray.direction.x ~= 0 then
+                return targetRecord
+            end
+            return nil
         end,
     }
     local guide = nil
@@ -75,6 +91,9 @@ local function runPath(firstEvent)
         nil,
         function(record, class, depth)
             guide = { record = record, class = class, depth = depth }
+        end,
+        function()
+            return { reflectionSeed = 123, transmissionSeed = 456 }
         end
     )
     return guide, hitCalls
@@ -88,14 +107,14 @@ local function runChecks()
         "guide must use first non-delta class")
     assertNear(transmissionGuide.depth, 3, 1e-12,
         "guide must store cumulative path depth")
-    assert(transmissionHits == 2,
-        "guide collection must not add scene hits")
+    assert(transmissionHits == 3,
+        "dual continuation must reuse primary hit and trace each branch once")
 
     local reflectionGuide, reflectionHits = runPath("reflection")
     assert(reflectionGuide == nil,
         "reflection branch must not record transmission guide")
     assert(reflectionHits == 2,
-        "reflection check must keep bounded scene hits")
+        "TIR fallback must keep one primary and one continuation hit")
 
     local aov = PrimaryAOV.new(1, 1)
     aov:set(0, 0, {

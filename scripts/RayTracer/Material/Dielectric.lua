@@ -34,8 +34,9 @@ function Dielectric:isDelta()
 end
 
 function Dielectric:sample(ray, record, rng)
-    local scattered, attenuation, isSpecular, event = self:scatter(ray, record, rng)
-    return scattered, attenuation, isSpecular, event, nil
+    local scattered, attenuation, isSpecular, event, fresnel =
+        self:scatter(ray, record, rng)
+    return scattered, attenuation, isSpecular, event, nil, fresnel
 end
 
 function Dielectric:evaluate(_, _, _)
@@ -46,7 +47,7 @@ function Dielectric:pdf(_, _, _)
     return 0
 end
 
-function Dielectric:scatter(ray, record, rng)
+function Dielectric:buildLobes(ray, record)
     local attenuation = Vec3.new(1, 1, 1)
     local ratio = record.frontFace and (1 / self.refractionIndex) or self.refractionIndex
     local unitDirection = ray.direction:unit()
@@ -55,19 +56,37 @@ function Dielectric:scatter(ray, record, rng)
         + unitDirection.z * record.normal.z
     local cosTheta = math.min(-directionDotNormal, 1.0)
     local sinTheta = math.sqrt(math.max(0.0, 1.0 - cosTheta * cosTheta))
-    local cannotRefract = ratio * sinTheta > 1
-    local direction
-    local scatterEvent
-
-    if cannotRefract or reflectance(cosTheta, ratio) > rng:nextFloat() then
-        direction = unitDirection:reflect(record.normal)
-        scatterEvent = "reflection"
-    else
-        direction = unitDirection:refract(record.normal, ratio)
-        scatterEvent = "transmission"
+    local totalInternalReflection = ratio * sinTheta > 1
+    local fresnel = totalInternalReflection and 1.0
+        or reflectance(cosTheta, ratio)
+    local reflectionRay = Ray.new(
+        record.point,
+        unitDirection:reflect(record.normal)
+    )
+    local transmissionRay = nil
+    if not totalInternalReflection then
+        transmissionRay = Ray.new(
+            record.point,
+            unitDirection:refract(record.normal, ratio)
+        )
     end
+    return {
+        attenuation = attenuation,
+        fresnel = fresnel,
+        reflectionRay = reflectionRay,
+        transmissionRay = transmissionRay,
+        totalInternalReflection = totalInternalReflection,
+    }
+end
 
-    return Ray.new(record.point, direction), attenuation, true, scatterEvent
+function Dielectric:scatter(ray, record, rng)
+    local lobes = self:buildLobes(ray, record)
+    if lobes.totalInternalReflection or lobes.fresnel > rng:nextFloat() then
+        return lobes.reflectionRay, lobes.attenuation, true,
+            "reflection", lobes.fresnel
+    end
+    return lobes.transmissionRay, lobes.attenuation, true,
+        "transmission", lobes.fresnel
 end
 
 return Dielectric

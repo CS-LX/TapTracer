@@ -633,6 +633,91 @@ Preview 验收（2026-07-19）：
 - 当前截图和日志未显示 firefly、异常高光或焦散是主要质量瓶颈，因此不增加 firefly clamp、path guiding、photon mapping 或 bidirectional 方法；
 - J.5 以“候选已评估、质量回归、停止扩展”结束，J.4 继续作为稳定实现；后续只有新的可重复数据明确指向上述瓶颈时才重新立项。
 
+#### J.6：玻璃剩余方差专项（下一阶段计划，2026-07-19）
+
+当前人工验收结论为：除玻璃仍有约 `40%` 的主观残余噪点外，其他区域已无明显噪点观感。后续只处理相机可见玻璃，不重新开启全图自适应采样，也不提高非玻璃区域的复杂度。
+
+现状诊断：
+
+- `Dielectric` 已按 Schlick Fresnel 概率在 reflection/transmission 间随机二选一，属于 PBRT 等路径追踪器常用的无偏比例采样，当前问题不是分支概率明显错误；
+- 每个被选中的玻璃分支返回单位 attenuation，Fresnel 权重由分支选择概率抵消；在 `32 spp` 下，法线入射附近约 `4%` 的反射 lobe 平均只有约 `1.28` 个样本，首玻璃界面的 Bernoulli 方差仍然明显；
+- J.4 的 `transmissionFilm` 只在主玻璃 sample 实际选择折射时写入完整 radiance，反射 sample 写零；A-Trous 已能过滤折射后首个非 delta 命中，但无法消除首界面“本 sample 选反射还是折射”的稀疏 lobe 方差；
+- 当前 transmission guide 已记录折射后首个 diffuse/glossy 命中的 Albedo、Normal、累计 path depth、class 和 coverage，方向与 OIDN 对完美镜面 delta 路径使用后续命中 guide、NRD 对 specular signal 使用 hit distance 的做法一致；
+- NRD 的时域重投影、神经网络 denoiser 和 GPU radiance cache 不适合当前纯 Lua、静态 Preview 管线；只借鉴其信号分离与 hit-distance 引导，不引入时域/GPU 依赖。
+
+##### J.6.0：玻璃方差基线与口径固定（已完成，2026-07-19）
+
+- 复用现有 `primaryTransmission*` 统计，不创建临时测试入口；已补齐平均 Fresnel、reflection/transmission 有效样本数、transmission guide coverage、各 target class 占比及玻璃 ROI 方差口径；
+- 固定 J.4 的 `256×144 / 32 spp / maxDepth=6`、相机、场景、曝光 `1.0` 和 RNG seed `42`；
+- 该子步只增加统计，不改变 Film、RNG 顺序、Scene hit 数或显示结果；完整 Preview 日志由 AI 直接读取。
+
+固定基线（2026-07-19）：
+
+- 完整 Preview compute 为 `198.304s`，共 `1179648` 条 camera path；路径、bounce、BVH 和分支计数在重复运行中完全一致；
+- 主玻璃样本 `90579`，平均 Fresnel 为 `0.091872`；reflection 有效样本 `8351`，transmission 有效样本 `82228`，实测 reflection 比例约 `9.220%`，与平均 Fresnel 仅相差约 `0.032` 个百分点；
+- transmission guide 有效样本 `78467`，相对 transmission 分支的 coverage 为 `0.954261`；有效 target 中 diffuse `78456 (99.986%)`、glossy `8 (0.010%)`、emission `3 (0.004%)`、other `0`；
+- ROI 口径固定为：使用 Film 左上原点坐标，仅纳入 Primary AOV 最终 class 为 `delta_transmission` 的像素；逐像素 sample variance 使用无偏亮度方差 `M2/(n-1)`，mean variance 使用 `sampleVariance/n`，ROI 数值取纳入像素的算术平均；
+- 实际玻璃 mask 包围盒为 `130,63-185,114`，共 `2764` 像素；ROI 由该包围盒按固定比例内缩后自动生成，避免 UI 缩放和截图位置影响坐标；
+- `glassUpper` ROI 为 `140,68-175,81`、`504` 像素：Beauty 平均亮度 `0.39603793`、sample variance `0.15927073`、mean variance `0.00497721`；transmission sample variance `0.16043218`、mean variance `0.00501351`、guide coverage `0.933966`；
+- `glassCore` ROI 为 `140,86-175,109`、`864` 像素：Beauty 平均亮度 `0.27732945`、sample variance `0.30224004`、mean variance `0.00944500`；transmission sample variance `0.27566796`、mean variance `0.00861462`、guide coverage `0.937174`。
+
+结论：J.6.0 已完成。Fresnel 分支概率与实测选择比例一致，未发现采样概率偏差；两个 ROI 的方差基线与亮度基线已固定。有效 transmission target 几乎全部为 diffuse，因此当前没有按 target class 分离滤波的优先证据；下一步按计划进入 J.6.1，直接处理首玻璃界面的 Bernoulli lobe 方差。
+
+##### J.6.1：主玻璃首事件 Fresnel 双 lobe 条件估计（已完成并通过验收，2026-07-19）
+
+- 仅当 camera path 的 `depth == 1` 首次命中 `delta_transmission` 时，从已经取得的 primary hit 同时构造 reflection 与 transmission continuation；全反射时只保留 reflection；
+- 使用当前 Schlick Fresnel 的 `F` 与 `1-F` 分别加权两条 continuation，合成为 `F * Lr + (1-F) * Lt`，保持当前实现的期望亮度；本阶段不顺带引入 eta radiance 修正，避免把物理校正与降噪混成一个变量；
+- 两条 continuation 使用由同一 camera sample seed 派生的独立固定 RNG 子流，确保结果可复现且互不消耗对方的随机序列；
+- 只拆分首个相机可见玻璃事件；后续玻璃界面继续使用现有随机采样，禁止递归双分支，单 camera sample 最多增加一条 continuation，避免路径指数增长；
+- 不重复 primary `scene:hit()`；新增成本只来自玻璃像素的第二条后续路径，并单独记录 continuation、Scene hit 和 compute 成本；
+- `transmissionFilm` 改为每个主玻璃 sample 都累积加权后的 `(1-F) * Lt`，不再因首界面选择 reflection 而写零；沿 transmission continuation 继续复用 J.4 的后续命中 guide；
+- 非玻璃路径保持原控制流与 RNG；非玻璃 Film、路径统计和显示结果应保持一致。
+
+J.6.1 验收结果（2026-07-19）：
+
+- 完整 Preview compute 为 `203.453s`，相对 J.6.0 的 `198.304s` 增加约 `2.60%`；总 camera path 仍为 `1179648`，非玻璃路径数量和固定基准保持不变；
+- 主玻璃 dual split `85685` 次，reflection/transmission continuation 均为 `85685`；reflection continuation Scene hit `156044`、transmission continuation Scene hit `503810`，按 Fresnel 概率估计的额外 Scene hit 为 `169955.502`；TIR fallback `4894`，unavailable fallback `0`；
+- `glassUpper` Beauty sample variance 从 `0.15927073` 降至 `0.13430552`，下降约 `15.67%`；mean variance 从 `0.00497721` 降至 `0.00419705`；平均亮度变化约 `-0.06%`；
+- `glassCore` Beauty sample variance 从 `0.30224004` 降至 `0.23267606`，下降约 `23.02%`；mean variance从 `0.00944500` 降至 `0.00727113`；平均亮度变化约 `+0.33%`；
+- 截图分别裁除 UI 背景并统一缩放到 `256×144` 后，`glassUpper` 相邻亮度差 P90 下降约 `9.34%`、Laplacian 中位数下降约 `35.00%`；`glassCore` 相邻亮度差 P90 下降约 `9.29%`、Laplacian 中位数下降约 `28.28%`；用户主观判断玻璃噪点降至原先约 `70%`；
+- 同一截图口径下，天空平均亮度变化 `0.00%`，左侧墙面平均亮度变化约 `-0.005%`；未观察到非玻璃亮度回归、玻璃轮廓串色或明显软化；
+- `[J61SemanticCheck] passed` 与更新后的 `[J4SemanticCheck] passed`；受控检查覆盖 primary hit 复用、双 continuation、Fresnel 加权、transmission AOV 权重、guide 归属、primary miss 和非玻璃 branch seed 隔离。
+
+结论：J.6.1 通过验收。核心 ROI 的 Film 方差下降超过 `20%`，两个 ROI 的显示颗粒代理均下降超过 `28%`，亮度和非玻璃区域稳定，compute 增量远低于 `50%` 回退门限。相邻差 P90 下降小于 Laplacian 指标，说明结构边缘仍被保留，没有依靠过度模糊换取降噪。当前统计未证明残余由 reflection continuation 主导，因此暂不实施 J.6.2 的 reflection AOV；J.6.1 作为当前稳定节点保留。
+
+J.6.1 门禁：
+
+- 玻璃核心及玻璃上部颗粒指标相对 J.4 至少下降 `20%`，主观残余噪点有明确下降；
+- 玻璃平均亮度变化不超过 `5%`，轮廓、折射结构和棋盘格边界无重影、串色或明显软化；
+- 非玻璃 ROI 平均亮度变化不超过 `1%`，不得重新出现墙顶或墙天边界噪声回归；
+- 记录总 compute 增量和玻璃 ROI 的“方差下降/耗时增量”；若 compute 增加超过 `50%` 且玻璃颗粒下降不足 `20%`，立即回退候选；
+- 验收失败时先回退，不通过提高全图 spp 掩盖问题。
+
+##### J.6.2：按 lobe 分离的显示降噪（仅在 J.6.1 后仍有结构化残余时实施）
+
+- 若统计证明 residual 主要来自 reflection continuation，再增加独立 `reflectionFilm/reflectionAov`；reflection 与 transmission 分别过滤后按 `Beauty - rawReflection - rawTransmission + filteredReflection + filteredTransmission` 重组；
+- diffuse target 可使用较强的 transmission 专用过滤参数，glossy/emission target 使用更保守的亮度与深度权重；不允许一组固定参数同时强抹所有 class；
+- 对 sky、无有效后续命中和真实 surface guide 使用不同有效性语义，禁止把 miss 与有几何意义的 Normal/Depth guide 混合；
+- 原始线性 HDR Film 与各 lobe Film 永远只读，所有鲁棒权重和重组仍局限于显示副本；
+- 该阶段借鉴 OIDN/OptiX 的 specular AOV 分离思想，但不接入外部神经网络或 GPU denoiser。
+
+##### J.6.3：只增不减的玻璃定向采样（候选已评估并回退，2026-07-19）
+
+- 候选按计划在基础 `32 spp` 完成后冻结 Primary AOV `delta_transmission` 且 coverage 不低于 `0.5` 的玻璃 mask，向外扩张一像素，并只对 mask 追加 `16 spp`；
+- 完整 Preview 的 mask 为 `2943` 像素，实际追加 `47088` 个样本；基础 compute `214.012s`、追加阶段 `22.767s`、总 compute `236.779s`，相对 J.6.1 的 `203.453s` 增加约 `16.38%`；
+- 用户对 J.6.3 与 J.6.1 完成图进行肉眼对比，未观察到可见差异；
+- `glassUpper` Beauty sample variance 从 J.6.1 的 `0.13430552` 升至 `0.14630013`，回归约 `8.93%`；`glassCore` 从 `0.23267606` 升至 `0.23558183`，回归约 `1.25%`；
+- 候选增加了明确的 compute 与样本预算，却没有主观收益，且两个 ROI 方差均未改善，单位耗时收益为负；已完整移除追加采样调度、配置、日志和专项检查，恢复 J.6.1 稳定实现。
+
+结论：J.6.3 停止。不得继续调整追加 spp、mask 阈值或扩张范围；后续保留 J.6.1，不以增加采样预算掩盖残余噪声。
+
+明确不做：
+
+- 当前没有 firefly、异常高光或焦散主导的证据，不引入 clamp、path guiding、photon mapping、bidirectional path tracing 或 radiance cache；
+- 不递归拆分所有玻璃 bounce，不将路径数量指数化；
+- 不用更强的全图 A-Trous、全图 spp 提升或再次减少非玻璃样本来掩盖玻璃问题；
+- 不在同一候选中同时修改 Fresnel、eta transport、过滤参数和采样预算。
+
 #### 阶段 J 执行顺序
 
 严格按以下顺序推进，禁止把多个质量变量混入同一次基准：
@@ -641,7 +726,8 @@ Preview 验收（2026-07-19）：
 2. `J.2` Lambertian NEE + MIS；
 3. `J.3` GGX 金属/光泽 + MIS；
 4. `J.4` transmission/path AOV 与玻璃显示降噪；
-5. `J.5` 自适应采样与必要的 firefly/焦散专项。
+5. `J.5` 自适应采样候选评估并因质量回归停止；
+6. `J.6` 玻璃剩余方差专项，依次执行基线、首事件双 lobe、必要的 lobe 分离和定向追加采样。
 
 总体验收：
 
@@ -662,7 +748,7 @@ Preview 验收（2026-07-19）：
 
 禁止并行混入后续阶段功能。例如阶段 F 只建立基准，不顺手修改分辨率；阶段 G 只修改采样调度，不同时引入 tone mapping；阶段 H 不提前实现 MIS。
 
-当前下一步固定为 **阶段 H-Preview-1：调度与显示上传**，原阶段 I/J 暂缓。
+当前稳定节点固定为 **J.6.1：主玻璃首事件 Fresnel 双 lobe 条件估计**。J.6.3 定向追加采样候选已因无可见收益且 ROI 方差回归而停止并回退；在形成新的、可测量的残余噪声假设前，不开始后续质量阶段。J.6.0 的基线口径、阶段 H～J.5 的实现与验收记录保留为历史依据，不再回到已完成阶段重复试错。
 
 ### 阶段 H-Preview：预览观感与交互速度优先
 

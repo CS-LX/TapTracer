@@ -74,6 +74,8 @@ local pendingDisplayUpload_ = false
 local reportedComplete_ = false
 local INSPECTOR_RESERVED_WIDTH = 278
 local DISPLAY_MARGIN = 24
+local J6_SEED = 42
+local J6_EXPOSURE = 1.0
 
 local function addBox(scene, minimum, maximum, material)
     local Vec3 = RayTracer.Vec3
@@ -243,7 +245,7 @@ local function buildRenderer(config)
         tileSize = 8,
         tileWidth = config.progressiveChunkWidth,
         tileHeight = config.progressiveChunkHeight,
-        seed = 42,
+        seed = J6_SEED,
         timeProvider = function()
             return GetTime():GetElapsedTime()
         end,
@@ -603,6 +605,108 @@ local function buildUI()
     UI.SetRoot(uiRoot_)
 end
 
+local function collectJ6GlassBounds(renderer)
+    local primaryAov = renderer.aov
+    local minX = renderer.width
+    local minY = renderer.height
+    local maxX = -1
+    local maxY = -1
+    local pixelCount = 0
+    for y = 0, renderer.height - 1 do
+        for x = 0, renderer.width - 1 do
+            if primaryAov:getDenoiseClass(x, y) == "delta_transmission" then
+                minX = math.min(minX, x)
+                minY = math.min(minY, y)
+                maxX = math.max(maxX, x)
+                maxY = math.max(maxY, y)
+                pixelCount = pixelCount + 1
+            end
+        end
+    end
+    return minX, minY, maxX, maxY, pixelCount
+end
+
+local function makeJ6GlassROIs(minX, minY, maxX, maxY)
+    local width = maxX - minX + 1
+    local height = maxY - minY + 1
+    local insetX = math.max(2, math.floor(width * 0.18))
+    local insetY = math.max(2, math.floor(height * 0.10))
+    local innerMinX = minX + insetX
+    local innerMaxX = maxX - insetX
+    local innerMinY = minY + insetY
+    local innerMaxY = maxY - insetY
+    local innerHeight = innerMaxY - innerMinY + 1
+    local upperEndY = innerMinY + math.max(0, math.floor(innerHeight * 0.35) - 1)
+    local coreStartY = innerMinY + math.floor(innerHeight * 0.45)
+    return {
+        {
+            name = "glassUpper",
+            x0 = innerMinX,
+            y0 = innerMinY,
+            x1 = innerMaxX,
+            y1 = upperEndY,
+        },
+        {
+            name = "glassCore",
+            x0 = innerMinX,
+            y0 = coreStartY,
+            x1 = innerMaxX,
+            y1 = innerMaxY,
+        },
+    }
+end
+
+local function collectJ6ROIStats(renderer, roi)
+    local film = renderer.film
+    local transmissionFilm = renderer.transmissionFilm
+    local primaryAov = renderer.aov
+    local transmissionAov = renderer.transmissionAov
+    local pixelCount = 0
+    local beautyMeanSum = 0
+    local beautyVarianceSum = 0
+    local beautyMeanVarianceSum = 0
+    local transmissionVarianceSum = 0
+    local transmissionMeanVarianceSum = 0
+    local transmissionGuideHits = 0
+    local primaryGlassSamples = 0
+
+    for y = roi.y0, roi.y1 do
+        for x = roi.x0, roi.x1 do
+            if primaryAov:getDenoiseClass(x, y) == "delta_transmission" then
+                local beautyMean, beautyVariance, beautySamples =
+                    film:getLuminanceMoments(x, y)
+                local _, transmissionVariance, transmissionSamples =
+                    transmissionFilm:getLuminanceMoments(x, y)
+                pixelCount = pixelCount + 1
+                beautyMeanSum = beautyMeanSum + beautyMean
+                beautyVarianceSum = beautyVarianceSum + beautyVariance
+                beautyMeanVarianceSum = beautyMeanVarianceSum
+                    + (beautySamples > 0 and beautyVariance / beautySamples or 0)
+                transmissionVarianceSum = transmissionVarianceSum + transmissionVariance
+                transmissionMeanVarianceSum = transmissionMeanVarianceSum
+                    + (transmissionSamples > 0
+                        and transmissionVariance / transmissionSamples or 0)
+                transmissionGuideHits = transmissionGuideHits
+                    + transmissionAov:getHitCount(x, y)
+                primaryGlassSamples = primaryGlassSamples
+                    + primaryAov:getSampleCount(x, y)
+            end
+        end
+    end
+
+    local inversePixels = pixelCount > 0 and 1 / pixelCount or 0
+    return {
+        pixelCount = pixelCount,
+        beautyMean = beautyMeanSum * inversePixels,
+        beautySampleVariance = beautyVarianceSum * inversePixels,
+        beautyMeanVariance = beautyMeanVarianceSum * inversePixels,
+        transmissionSampleVariance = transmissionVarianceSum * inversePixels,
+        transmissionMeanVariance = transmissionMeanVarianceSum * inversePixels,
+        guideCoverage = primaryGlassSamples > 0
+            and transmissionGuideHits / primaryGlassSamples or 0,
+    }
+end
+
 local function printRenderStats(renderer)
     local stats = renderer:getStats()
     local integrator = stats.integrator or {}
@@ -652,8 +756,14 @@ local function printRenderStats(renderer)
         displayAOVAcceptedVisits_
     ))
     local transmissionCount = integrator.primaryTransmissionCount or 0
+    local fresnelSum = integrator.primaryTransmissionFresnelSum or 0
     local reflectionCount = integrator.primaryTransmissionReflectionCount or 0
     local refractionCount = integrator.primaryTransmissionRefractionCount or 0
+    local guideCount = integrator.primaryTransmissionGuideCount or 0
+    local guideDiffuseCount = integrator.primaryTransmissionGuideDiffuseCount or 0
+    local guideGlossyCount = integrator.primaryTransmissionGuideGlossyCount or 0
+    local guideEmissionCount = integrator.primaryTransmissionGuideEmissionCount or 0
+    local guideOtherCount = integrator.primaryTransmissionGuideOtherCount or 0
     local firstDiffuseCount = integrator.primaryTransmissionFirstDiffuseCount or 0
     local firstGlossyCount = integrator.primaryTransmissionFirstGlossyCount or 0
     local firstEmissionCount = integrator.primaryTransmissionFirstEmissionCount or 0
@@ -689,6 +799,84 @@ local function printRenderStats(renderer)
         depthLimitCount,
         math.max(0, transmissionCount - classifiedCount)
     ))
+    print(string.format(
+        "[RayTracer][J6.1] compute=%.3fs primaryGlass=%d dualSplit=%d reflectionContinuations=%d transmissionContinuations=%d expectedExtraSceneHits=%.3f reflectionSceneHits=%d transmissionSceneHits=%d tirFallback=%d unavailableFallback=%d",
+        stats.elapsedSeconds,
+        transmissionCount,
+        integrator.j61DualSplitCount or 0,
+        integrator.j61ReflectionLaunchCount or 0,
+        integrator.j61TransmissionLaunchCount or 0,
+        integrator.j61ExpectedExtraHitCount or 0,
+        integrator.j61ReflectionSceneHitCalls or 0,
+        integrator.j61TransmissionSceneHitCalls or 0,
+        integrator.j61TirCount or 0,
+        integrator.j61UnavailableCount or 0
+    ))
+    print(string.format(
+        "[RayTracer][J6.0] config=%dx%d spp=%d maxDepth=%d seed=%d exposure=%.3f",
+        CONFIG.width,
+        CONFIG.height,
+        CONFIG.samplesPerPixel,
+        CONFIG.maxDepth,
+        J6_SEED,
+        J6_EXPOSURE
+    ))
+    print(string.format(
+        "[RayTracer][J6.0] primaryGlass=%d avgFresnel=%.6f reflectionEffective=%d transmissionEffective=%d guideEffective=%d guideCoverage=%.6f",
+        transmissionCount,
+        transmissionCount > 0 and fresnelSum / transmissionCount or 0,
+        reflectionCount,
+        refractionCount,
+        guideCount,
+        refractionCount > 0 and guideCount / refractionCount or 0
+    ))
+    print(string.format(
+        "[RayTracer][J6.0] transmissionTargets diffuse=%d(%.3f%%) glossy=%d(%.3f%%) emission=%d(%.3f%%) other=%d(%.3f%%)",
+        guideDiffuseCount,
+        guideCount > 0 and guideDiffuseCount * 100 / guideCount or 0,
+        guideGlossyCount,
+        guideCount > 0 and guideGlossyCount * 100 / guideCount or 0,
+        guideEmissionCount,
+        guideCount > 0 and guideEmissionCount * 100 / guideCount or 0,
+        guideOtherCount,
+        guideCount > 0 and guideOtherCount * 100 / guideCount or 0
+    ))
+    print("[RayTracer][J6.0] roiMetric=Film coordinates with top-left origin; primary-delta-transmission pixels only; sampleVariance=unbiased luminance M2/(n-1); meanVariance=sampleVariance/n; ROI value=arithmetic mean across included pixels")
+    local glassMinX, glassMinY, glassMaxX, glassMaxY, glassPixels =
+        collectJ6GlassBounds(renderer)
+    print(string.format(
+        "[RayTracer][J6.0] glassBounds=%d,%d-%d,%d pixels=%d",
+        glassMinX,
+        glassMinY,
+        glassMaxX,
+        glassMaxY,
+        glassPixels
+    ))
+    local glassROIs = makeJ6GlassROIs(
+        glassMinX,
+        glassMinY,
+        glassMaxX,
+        glassMaxY
+    )
+    for i = 1, #glassROIs do
+        local roi = glassROIs[i]
+        local roiStats = collectJ6ROIStats(renderer, roi)
+        print(string.format(
+            "[RayTracer][J6.0] roi=%s bounds=%d,%d-%d,%d pixels=%d beautyMean=%.8f beautySampleVariance=%.8f beautyMeanVariance=%.8f transmissionSampleVariance=%.8f transmissionMeanVariance=%.8f guideCoverage=%.6f",
+            roi.name,
+            roi.x0,
+            roi.y0,
+            roi.x1,
+            roi.y1,
+            roiStats.pixelCount,
+            roiStats.beautyMean,
+            roiStats.beautySampleVariance,
+            roiStats.beautyMeanVariance,
+            roiStats.transmissionSampleVariance,
+            roiStats.transmissionMeanVariance,
+            roiStats.guideCoverage
+        ))
+    end
 end
 
 function Start()
