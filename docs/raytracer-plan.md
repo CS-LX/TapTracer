@@ -504,7 +504,7 @@ job:GetStats()
 - PDF 非负、有限且与采样分布匹配；
 - 不产生 NaN、Inf、负概率或重复发光贡献。
 
-#### J.2：Lambertian NEE + MIS
+#### J.2：Lambertian NEE + MIS（已完成，2026-07-18）
 
 - 将当前简化显式光源采样升级为可计算 light PDF 的标准 NEE；
 - Lambertian 使用 cosine-weighted hemisphere sampling，并提供对应的 BSDF evaluation 与 PDF；
@@ -512,6 +512,24 @@ job:GetStats()
 - 使用 power heuristic 合并权重；
 - BSDF 路径直接命中发光体时按 MIS 权重计入 emission，避免与 NEE 重复计算；
 - 玻璃 delta bounce 之后首次命中 diffuse 时，同样允许该 diffuse 顶点执行 NEE/MIS，从而降低透过玻璃后照明的方差。
+
+实现结果：
+
+- Lambertian 已改为 cosine-weighted hemisphere sampling，采样 PDF 与 `cosine / π` 匹配；
+- Quad、Sphere 和 Triangle 均可把均匀面积采样 PDF 转换为指定命中点的立体角 PDF；
+- NEE 与 BSDF-hit emission 使用 power heuristic 合并，并计入均匀选择光源的离散概率；
+- `useMIS=false` 保留旧积分路径，默认 Preview 已启用 `useMIS=true`；
+- rough Metal 仍不参与连续 MIS，继续留给 J.3 的 GGX 实现；理想玻璃仍保持 delta 事件，但其后续 diffuse 顶点可执行 NEE/MIS。
+
+显示空间验收（2026-07-18）：
+
+- 用户对完成态 Preview 人工检查后确认：玻璃区域噪点明显下降，未观察到重复发光、黑斑或异常亮点；
+- 对 J.2 完成图与原基线图去除黑边、统一缩放后，在玻璃核心区域比较显示亮度高频代理：相邻亮度差 P90 下降约 `39.9%`，Laplacian 中位数下降约 `53.9%`；
+- 玻璃上部区域的相邻亮度差 P90 下降约 `46.2%`，Laplacian 中位数下降约 `60.2%`；
+- 两个玻璃 ROI 的平均显示亮度分别变化约 `-1.6%` 与 `-4.0%`，均在 `5%` 门限内；
+- 两张截图的原始尺寸和黑边不同，因此以上数据只作为对齐后的显示空间噪声代理，不等同于线性 HDR Film 方差或严格逐像素 unbiasedness 证明。
+
+结论：J.2 的代码闭环与 Preview 观感验收均已完成；当前证据支持“透过玻璃可见的 diffuse 内容噪声下降”，不宣称已解决理想玻璃 Fresnel、轮廓或焦散噪声。
 
 预期收益：
 
