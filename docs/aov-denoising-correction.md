@@ -294,23 +294,31 @@ Clamp / Image / Texture2D
 
 ## 6. 分阶段实施路线
 
-### AOV-Correct-1：恢复特征与 Beauty 的一致性
+### AOV-Correct-1：恢复特征与 Beauty 的一致性（已完成，2026-07-18）
 
 目标：先消除确定性的语义错误，不调滤波观感参数。
 
-- PrimaryAOV 改为逐 sample 累积；
-- 增加 sampleCount、hitCount 和 coverage；
-- Normal 读取时归一化；
-- Depth 只对有效命中累积；
-- 增加 material class；
-- 固定 seed 下比较阻塞/分步 AOV；
-- 不增加场景求交次数。
+已完成：
 
-门禁：
+- PrimaryAOV 已改为逐 sample 累积；
+- 已增加 sampleCount、hitCount 和 coverage；
+- Normal 在滤波读取边界归一化；
+- Depth 只对有效命中累积；
+- 固定 seed 下，阻塞渲染、分步渲染和 reset 后重渲染的 AOV 一致性测试通过；
+- 未增加场景求交次数。
+
+阶段边界说明：
+
+- 本阶段只恢复 AOV 与 Beauty 的 sample 对应关系，不处理 Dielectric 的滤波策略；
+- 水面在本阶段完成后仍可能保持纠偏前的错误提亮，这是已知基线，不代表最终降噪语义正确；
+- 水面亮度漂移由紧随其后的 `AOV-Correct-2` 负责：加入材质分类，并对 delta reflection/transmission 采用首次非 delta 特征或保守直通策略；
+- 因此“水面尚未变暗”不阻塞 AOV-Correct-1 验收，但会阻塞 AOV-Correct-2 和整个 H-Preview-3A 的最终验收。
+
+已通过门禁：
 
 - N spp AOV 与同样 N spp Beauty 使用相同 sample 序列；
 - Tile budget 不改变最终 AOV；
-- 水面不再由“最后一个 sample 的白色 AOV”控制整片滤波。
+- AOV 不再由最后一个 sample 覆盖，miss 也不会清空此前有效特征。
 
 ### AOV-Correct-2：材质分类与 delta 保守策略
 
@@ -406,7 +414,7 @@ Clamp / Image / Texture2D
 ## 8. 当前决策
 
 - 当前 AOV A-Trous 原型保留为问题复现和差分基线，不作为可信完成态；
-- 下一开发阶段固定为 `AOV-Correct-1`，先修复 AOV sample 累积与 coverage；
-- 随后执行 `AOV-Correct-2`，优先消除 Dielectric 水面亮度漂移；
+- `AOV-Correct-1` 已完成：AOV sample 累积、有效命中平均、coverage 和调度一致性测试均已落地；
+- 下一开发阶段固定为 `AOV-Correct-2`，加入材质分类并优先消除 Dielectric 水面亮度漂移；
 - 完整 lobe 拆分、Albedo demodulation 和 5×5 kernel 均后置，不阻塞首轮纠偏；
 - 在 AOV-Correct-1～3 完成前，不继续通过放宽颜色权重或增加滤波轮数追求更平滑画面。

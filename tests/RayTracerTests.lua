@@ -1,6 +1,7 @@
 local RT = require "RayTracer"
 local QualityPresets = require "RayTracer.Config.QualityPresets"
 local DisplayDenoise = require "RayTracer.Display.DisplayDenoise"
+local PrimaryAOV = require "RayTracer.Display.PrimaryAOV"
 
 local function assertNear(actual, expected, epsilon, label)
     if math.abs(actual - expected) > epsilon then
@@ -118,6 +119,23 @@ local function filmsMatch(first, second)
     end
 end
 
+local function assertAOVsMatch(first, second)
+    assert(first.width == second.width and first.height == second.height, "AOV dimensions should match")
+    for y = 0, first.height - 1 do
+        for x = 0, first.width - 1 do
+            assertNear(first:getSampleCount(x, y), second:getSampleCount(x, y), 0, "AOV sample count match")
+            assertNear(first:getHitCount(x, y), second:getHitCount(x, y), 0, "AOV hit count match")
+            local firstHit, firstAlbedo, firstNormal, firstDepth, firstCoverage = first:get(x, y)
+            local secondHit, secondAlbedo, secondNormal, secondDepth, secondCoverage = second:get(x, y)
+            assert(firstHit == secondHit, "AOV hit presence should match")
+            assertVectorNear(firstAlbedo, secondAlbedo, 0, "AOV albedo match")
+            assertVectorNear(firstNormal, secondNormal, 0, "AOV normal match")
+            assertNear(firstDepth, secondDepth, 0, "AOV depth match")
+            assertNear(firstCoverage, secondCoverage, 0, "AOV coverage match")
+        end
+    end
+end
+
 local function testPhaseCRenderer()
     local blocking = createTestRenderer {
         width = 10,
@@ -159,6 +177,7 @@ local function testPhaseCRenderer()
     assert(stepped:progress() < 1, "partial renderer should not be complete")
     stepped:render()
     filmsMatch(blocking.film, stepped.film)
+    assertAOVsMatch(blocking.aov, stepped.aov)
 
     local resetStats = stepped:getStats()
     stepped:reset()
@@ -171,6 +190,7 @@ local function testPhaseCRenderer()
     assert(not afterReset.complete and not afterReset.cancelled, "reset should clear renderer state")
     stepped:render()
     filmsMatch(blocking.film, stepped.film)
+    assertAOVsMatch(blocking.aov, stepped.aov)
     assert(resetStats.complete, "pre-reset renderer should have completed")
 
     local wideBudget = createTestRenderer {
@@ -182,6 +202,7 @@ local function testPhaseCRenderer()
     }
     wideBudget:render()
     filmsMatch(blocking.film, wideBudget.film)
+    assertAOVsMatch(blocking.aov, wideBudget.aov)
 
     local clock = 0
     local pathRenderer = createTestRenderer {
@@ -206,9 +227,18 @@ local function testPhaseCRenderer()
     assert(pathStats.integrator.pathCount == 24, "path renderer count")
     assert(pathStats.integrator.bounceCount >= pathStats.integrator.pathCount, "path bounce count")
     assert(pathStats.integrator.hitCount + pathStats.integrator.missCount == pathStats.integrator.bounceCount, "path hit miss accounting")
+    for y = 0, pathRenderer.height - 1 do
+        for x = 0, pathRenderer.width - 1 do
+            assertNear(pathRenderer.aov:getSampleCount(x, y), 2, 0, "path AOV sample count")
+            local hits = pathRenderer.aov:getHitCount(x, y)
+            local coverage = pathRenderer.aov:getCoverage(x, y)
+            assertNear(coverage, hits / 2, 1e-8, "path AOV coverage")
+        end
+    end
     pathRenderer:reset()
     local resetPathStats = pathRenderer:getStats()
     assert(resetPathStats.integrator.pathCount == 0, "reset integrator stats")
+    assertNear(pathRenderer.aov:getSampleCount(0, 0), 0, 0, "reset path AOV samples")
 
     local passFilm = RT.Film.new(1, 1)
     passFilm:addSample(0, 0, Vec3.new(0.2, 0.4, 0.6))
@@ -621,6 +651,42 @@ local function testDisplayDenoise()
     assert(edgeRed > 0.1 and edgeRed < 0.9, "denoise edge should remain bounded")
 end
 
+local function testPrimaryAOVAccumulation()
+    local aov = PrimaryAOV.new(2, 1)
+    aov:set(0, 0, {
+        hit = true,
+        albedo = Vec3.new(0.2, 0.4, 0.6),
+        normal = Vec3.new(0, 1, 0),
+        depth = 2,
+    })
+    aov:set(0, 0, nil)
+    aov:set(0, 0, {
+        hit = true,
+        albedo = Vec3.new(0.6, 0.8, 1.0),
+        normal = Vec3.new(0, 1, 0),
+        depth = 4,
+    })
+
+    local hit, albedo, normal, depth, coverage = aov:get(0, 0)
+    assert(hit, "accumulated AOV should report a hit")
+    assertVectorNear(albedo, Vec3.new(0.4, 0.6, 0.8), 1e-8, "AOV albedo average")
+    assertVectorNear(normal, Vec3.new(0, 1, 0), 1e-8, "AOV normalized normal")
+    assertNear(depth, 3, 1e-8, "AOV valid-hit depth average")
+    assertNear(coverage, 2 / 3, 1e-8, "AOV hit coverage")
+    assertNear(aov:getSampleCount(0, 0), 3, 0, "AOV sample count")
+    assertNear(aov:getHitCount(0, 0), 2, 0, "AOV hit count")
+
+    local miss, _, _, missDepth, missCoverage = aov:get(1, 0)
+    assert(not miss, "untouched AOV pixel should miss")
+    assertNear(missDepth, 0, 0, "untouched AOV depth")
+    assertNear(missCoverage, 0, 0, "untouched AOV coverage")
+
+    aov:clear()
+    assertNear(aov:getSampleCount(0, 0), 0, 0, "cleared AOV sample count")
+    assertNear(aov:getHitCount(0, 0), 0, 0, "cleared AOV hit count")
+    assertNear(aov:getCoverage(0, 0), 0, 0, "cleared AOV coverage")
+end
+
 local function testOutput()
     local film = renderFilm()
     local ppm = {}
@@ -653,6 +719,7 @@ testQuadAndRussianRoulette()
 testCornellBoxSceneGeometry()
 testQualityPresets()
 testDisplayDenoise()
+testPrimaryAOVAccumulation()
 testPhaseCRenderer()
 testPresenters()
 testOutput()
