@@ -112,7 +112,9 @@ function Renderer.new(options)
         scene = options.scene,
         integrator = options.integrator,
         film = options.film or Film.new(width, height),
+        transmissionFilm = options.transmissionFilm or Film.new(width, height),
         aov = options.aov or PrimaryAOV.new(width, height),
+        transmissionAov = options.transmissionAov or PrimaryAOV.new(width, height),
         width = width,
         height = height,
         samplesPerPixel = samplesPerPixel,
@@ -153,7 +155,9 @@ end
 
 function Renderer:reset()
     self.film:clear()
+    self.transmissionFilm:clear()
     self.aov:clear()
+    self.transmissionAov:clear()
     self.nextTile = 1
     self.completedTiles = 0
     self.completedPasses = 0
@@ -256,19 +260,43 @@ function Renderer:renderPixel(pixelIndex, sampleIndex)
     local y = math.floor(pixelIndex / self.width)
     local rng = RNG.new(deriveSampleSeed(self.seed, pixelIndex, sampleIndex))
     local ray = self.camera:getRay(x, y, rng)
-    local color = self.integrator:trace(ray, self.scene, rng, function(primaryRecord)
-        if primaryRecord ~= nil and primaryRecord.material ~= nil then
-            self.aov:set(x, y, {
+    local transmissionSample = nil
+    local color, transmissionColor = self.integrator:trace(
+        ray,
+        self.scene,
+        rng,
+        function(primaryRecord)
+            if primaryRecord ~= nil and primaryRecord.material ~= nil then
+                self.aov:set(x, y, {
+                    hit = true,
+                    class = getPrimaryDenoiseClass(primaryRecord.material, primaryRecord),
+                    albedo = getPrimaryAlbedo(primaryRecord.material, primaryRecord),
+                    normal = primaryRecord.normal,
+                    depth = primaryRecord.t,
+                })
+            else
+                self.aov:set(x, y, nil)
+            end
+        end,
+        function(transmissionRecord, materialClass, pathDepth)
+            transmissionSample = {
                 hit = true,
-                class = getPrimaryDenoiseClass(primaryRecord.material, primaryRecord),
-                albedo = getPrimaryAlbedo(primaryRecord.material, primaryRecord),
-                normal = primaryRecord.normal,
-                depth = primaryRecord.t,
-            })
-        else
-            self.aov:set(x, y, nil)
+                class = materialClass,
+                albedo = getPrimaryAlbedo(
+                    transmissionRecord.material,
+                    transmissionRecord
+                ),
+                normal = transmissionRecord.normal,
+                depth = pathDepth,
+            }
         end
-    end)
+    )
+    self.transmissionAov:set(x, y, transmissionSample)
+    self.transmissionFilm:addSample(
+        x,
+        y,
+        transmissionColor or Vec3.new(0, 0, 0)
+    )
     self.film:addSample(x, y, color)
     self.totalSamples = self.totalSamples + 1
     self.totalRays = self.totalRays + 1

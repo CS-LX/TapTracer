@@ -214,7 +214,7 @@ end
 ---@param scene table
 ---@param rng table
 ---@return table|nil
-function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
+function PathIntegrator:trace(ray, scene, rng, onPrimaryHit, onTransmissionHit)
     local integrator = self
     local stats = integrator.stats
     stats.pathCount = stats.pathCount + 1
@@ -231,7 +231,10 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
     local previousBsdfPdf = 0
     local previousBsdfOrigin = nil
     local primaryTransmission = false
+    local primaryRefractedPath = false
     local pendingTransmissionTarget = false
+    local pendingRefractedGuide = false
+    local traveledDistance = 0
 
     for depth = 1, maxDepth do
         stats.bounceCount = stats.bounceCount + 1
@@ -251,21 +254,24 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
             local skyX = 1 * (1 - blend) + background.x * blend
             local skyY = 1 * (1 - blend) + background.y * blend
             local skyZ = 1 * (1 - blend) + background.z * blend
-            return Vec3.new(
+            local result = Vec3.new(
                 radianceR + attenuationR * skyX,
                 radianceG + attenuationG * skyY,
                 radianceB + attenuationB * skyZ
             )
+            return result, primaryRefractedPath and result or nil
         end
 
         stats.hitCount = stats.hitCount + 1
+        traveledDistance = traveledDistance + record.t * currentRay.direction:length()
 
         if record.material == nil then
             if primaryTransmission and pendingTransmissionTarget then
                 recordFirstTransmissionTarget(stats, "unknown")
                 pendingTransmissionTarget = false
             end
-            return Vec3.new(radianceR, radianceG, radianceB)
+            local result = Vec3.new(radianceR, radianceG, radianceB)
+            return result, primaryRefractedPath and result or nil
         end
 
         local materialClass = denoiseClass(record.material, record)
@@ -273,7 +279,11 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
                 and materialClass ~= "delta_transmission"
                 and materialClass ~= "delta_reflection" then
             recordFirstTransmissionTarget(stats, materialClass)
+            if pendingRefractedGuide and onTransmissionHit ~= nil then
+                onTransmissionHit(record, materialClass, traveledDistance)
+            end
             pendingTransmissionTarget = false
+            pendingRefractedGuide = false
         end
 
         local emitted = Vec3.new(0, 0, 0)
@@ -339,6 +349,8 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
         if depth == 1 and materialClass == "delta_transmission" then
             primaryTransmission = true
             pendingTransmissionTarget = true
+            pendingRefractedGuide = scatterEvent == "transmission"
+            primaryRefractedPath = pendingRefractedGuide
             stats.primaryTransmissionCount =
                 stats.primaryTransmissionCount + 1
             if scatterEvent == "reflection" then
@@ -355,7 +367,8 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
                     stats.primaryTransmissionScatterStopCount + 1
                 pendingTransmissionTarget = false
             end
-            return Vec3.new(radianceR, radianceG, radianceB)
+            local result = Vec3.new(radianceR, radianceG, radianceB)
+            return result, primaryRefractedPath and result or nil
         end
 
         local albedoR = albedo.x
@@ -374,7 +387,8 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
                         stats.primaryTransmissionRouletteCount + 1
                     pendingTransmissionTarget = false
                 end
-                return Vec3.new(radianceR, radianceG, radianceB)
+                local result = Vec3.new(radianceR, radianceG, radianceB)
+                return result, primaryRefractedPath and result or nil
             end
             attenuationR = adjusted.x
             attenuationG = adjusted.y
@@ -389,7 +403,8 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
         stats.primaryTransmissionDepthLimitCount =
             stats.primaryTransmissionDepthLimitCount + 1
     end
-    return Vec3.new(radianceR, radianceG, radianceB)
+    local result = Vec3.new(radianceR, radianceG, radianceB)
+    return result, primaryRefractedPath and result or nil
 end
 
 return PathIntegrator

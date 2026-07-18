@@ -21,6 +21,7 @@ local CONFIG = {
     maxTilesPerStep = ACTIVE_PRESET.maxTilesPerStep,
     maxDepth = ACTIVE_PRESET.maxDepth or 8,
     denoise = true,
+    transmissionDenoise = true,
     denoiseIterations = 3,
     denoiseKernel = "3x3",
 }
@@ -276,6 +277,7 @@ local function setConfig(config)
     CONFIG.maxTilesPerStep = renderConfig_.maxTilesPerStep
     CONFIG.maxDepth = renderConfig_.maxDepth
     CONFIG.denoise = renderConfig_.denoise
+    CONFIG.transmissionDenoise = renderConfig_.transmissionDenoise ~= false
     CONFIG.denoiseIterations = renderConfig_.denoiseIterations or 3
     CONFIG.denoiseKernel = renderConfig_.denoiseKernel or "3x3"
 end
@@ -302,6 +304,37 @@ local function updateDisplayFromFrame(frame, iterations)
             iterations = iterations,
             kernel = CONFIG.denoiseKernel,
         })
+        local filteredTransmission = nil
+        if CONFIG.transmissionDenoise then
+            filteredTransmission = AOVAtrous.filter(
+                renderer_.transmissionFilm,
+                renderer_.transmissionAov,
+                {
+                    iterations = iterations,
+                    kernel = CONFIG.denoiseKernel,
+                }
+            )
+        end
+        local filteredBeauty = displayFrame
+        displayFrame = {
+            width = frame.width,
+            height = frame.height,
+            stats = filteredBeauty.stats,
+            get = function(_, column, row)
+                local beautyR, beautyG, beautyB = frame:get(column, row)
+                local rawR, rawG, rawB = renderer_.transmissionFilm:get(column, row)
+                local primaryClass = renderer_.aov:getDenoiseClass(column, row)
+                if primaryClass ~= "delta_transmission"
+                        or filteredTransmission == nil then
+                    return filteredBeauty:get(column, row)
+                end
+                local filteredR, filteredG, filteredB =
+                    filteredTransmission:get(column, row)
+                return beautyR - rawR + filteredR,
+                    beautyG - rawG + filteredG,
+                    beautyB - rawB + filteredB
+            end,
+        }
         local aovSeconds = math.max(
             0,
             GetTime():GetElapsedTime() - aovStart

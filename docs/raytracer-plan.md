@@ -569,7 +569,7 @@ job:GetStats()
 - 相同 spp 下高光颗粒和随机亮斑下降；
 - 为后续粗糙玻璃提供一致的微表面接口基础。
 
-#### J.4：transmission/path AOV 与玻璃显示降噪
+#### J.4：transmission/path AOV 与玻璃显示降噪（已完成，2026-07-19）
 
 - 主表面 Primary AOV 保持不变，继续用于玻璃 mask、轮廓和材质边界；
 - 沿当前 sample 已选择的反射/折射路径复用既有 hit，不为采集 AOV 增加额外求交；
@@ -578,6 +578,34 @@ job:GetStats()
 - transmission 过滤只在 refracted guides 兼容时传播，并以主玻璃轮廓作为硬边界；
 - 原始线性 HDR Film 永远不被降噪器修改；所有过滤仍只作用于独立显示副本；
 - 不恢复已经证明收益不足的固定 `20%` 邻域混合候选。
+
+当前实现：
+
+- Renderer 新增独立 `transmissionAov`，与 Primary AOV 使用相同的逐 sample 累积和 coverage 语义，reset 时同步清空；
+- PathIntegrator 只在主表面为理想玻璃且当前 sample 实际选择 transmission 分支时开启引导采集；主玻璃反射分支不伪装为折射引导；
+- 沿既有路径首次命中非 delta 表面时，复用该次 hit 记录 Normal、累计 path depth、Albedo 和 material class，不增加 Scene/BVH 求交；
+- 未取得有效折射后命中的 sample 仍向 `transmissionAov` 写入 miss，因此 coverage 能表达引导有效比例；
+- 当前已新增独立 `transmissionFilm`，只累积主玻璃实际选择 transmission 分支时的完整 sample radiance；其他 sample 累积零，因此保留 Fresnel 事件概率；
+- 显示端只对 `transmissionFilm` 使用 `transmissionAov` 过滤，并在主表面 `delta_transmission` 轮廓内按 `Beauty - rawTransmission + filteredTransmission` 重组；反射与非玻璃贡献保持原值；
+- `CONFIG.transmissionDenoise` 可独立关闭 transmission 重组，原始线性 HDR Beauty Film 和 transmission Film 都不被显示滤波写回；
+- 当前实现已避免使用 transmission guide 过滤整幅混合 Beauty，并通过受控语义检查与 Preview 门禁。
+
+受控语义检查（2026-07-19）：
+
+- 使用固定最多两次 `scene:hit()`、无 Film 遍历、自动 `engine:Exit()` 的 `Checks/J4TransmissionAOV.lua` 验证；
+- 真实 transmission 分支记录首次非 delta guide，reflection 分支不记录；
+- guide 采集没有增加 Scene hit，累计 path depth、coverage 和 reset 语义均通过；
+- 检查输出 `[J4SemanticCheck] passed`，进程 exit code 为 `0`。
+
+Preview 验收（2026-07-19）：
+
+- 用户人工确认：除玻璃外其他区域无明显变化；玻璃噪点相对 J.3 进一步下降，但仍存在残余颗粒；玻璃轮廓未向外串色，区域无明显变亮或变暗；
+- 当前图与 J.3 基线分别去黑边并统一对齐后，玻璃核心相邻亮度差 P90 下降约 `42.3%`，Laplacian 中位数下降约 `53.4%`，平均亮度变化约 `+0.38%`；
+- 玻璃上部相邻亮度差 P90 下降约 `48.7%`，Laplacian 中位数下降约 `51.9%`，平均亮度变化约 `-1.52%`；
+- 非玻璃采样区域平均亮度变化约 `+0.06%`；两图尺寸略有差异，因此配对 RGB 差只作辅助，不作为严格 Film 等价证明；
+- 以上亮度变化均低于 `5%` 门限，未观察到重影、串色或明显结构回归。
+
+结论：J.4 已完成。transmission 专用 guide 与 lobe radiance 拆分显著降低了玻璃显示颗粒，同时保持轮廓、亮度与非玻璃区域稳定；残余玻璃噪声留给 J.5 根据数据决定是否继续处理。
 
 门禁：
 
