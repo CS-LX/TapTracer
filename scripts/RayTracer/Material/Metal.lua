@@ -29,6 +29,29 @@ function Metal:albedoAt(_)
     return self.albedo
 end
 
+function Metal:isDelta()
+    return self.fuzz <= 1e-6
+end
+
+function Metal:sample(ray, record, rng)
+    local scattered, attenuation, isSpecular, event = self:scatter(ray, record, rng)
+    return scattered, attenuation, isSpecular, event, nil
+end
+
+function Metal:evaluate(_, _, _)
+    if self:isDelta() then
+        return Vec3.new(0, 0, 0)
+    end
+    return nil
+end
+
+function Metal:pdf(_, _, _)
+    if self:isDelta() then
+        return 0
+    end
+    return nil
+end
+
 function Metal:scatter(ray, record, rng)
     local reflected = ray.direction:unit():reflect(record.normal)
     reflected = reflected + Vec3.randomUnitVector(rng) * self.fuzz

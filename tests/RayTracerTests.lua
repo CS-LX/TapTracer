@@ -381,6 +381,139 @@ local function testMaterials()
     assertNear(glassRay.direction:length(), 1, 1e-8, "Dielectric direction length")
 end
 
+local function testJ1BSDFContract()
+    local record = {
+        point = Vec3.new(0, 0, 0),
+        normal = Vec3.new(0, 1, 0),
+        frontFace = true,
+    }
+    local incomingRay = Ray.new(Vec3.new(0, 1, 0), Vec3.new(0, -1, 0))
+    local outgoingDirection = -incomingRay.direction
+    local upperDirection = Vec3.new(0, 1, 0)
+    local lowerDirection = Vec3.new(0, -1, 0)
+
+    local diffuseColor = Vec3.new(0.6, 0.3, 0.15)
+    local diffuse = RT.Lambertian.new(diffuseColor)
+    assert(diffuse:isDelta() == false, "Lambertian must be non-delta")
+    assertVectorNear(
+        diffuse:evaluate(record, outgoingDirection, upperDirection),
+        diffuseColor * (1 / math.pi),
+        1e-12,
+        "Lambertian evaluate"
+    )
+    assertNear(
+        diffuse:pdf(record, outgoingDirection, upperDirection),
+        1 / math.pi,
+        1e-12,
+        "Lambertian normal-direction PDF"
+    )
+    assertNear(
+        diffuse:pdf(record, outgoingDirection, lowerDirection),
+        0,
+        0,
+        "Lambertian below-surface PDF"
+    )
+    assertVectorNear(
+        diffuse:evaluate(record, outgoingDirection, lowerDirection),
+        Vec3.new(0, 0, 0),
+        0,
+        "Lambertian below-surface evaluate"
+    )
+    local diffuseLegacyRay, diffuseLegacyAttenuation =
+        diffuse:scatter(incomingRay, record, RT.RNG.new(17))
+    local diffuseSampleRay, diffuseSampleAttenuation, diffuseSpecular,
+        diffuseEvent, diffuseSamplePdf =
+        diffuse:sample(incomingRay, record, RT.RNG.new(17))
+    assertVectorNear(
+        diffuseSampleRay.direction,
+        diffuseLegacyRay.direction,
+        0,
+        "Lambertian sample keeps legacy direction"
+    )
+    assertVectorNear(
+        diffuseSampleAttenuation,
+        diffuseLegacyAttenuation,
+        0,
+        "Lambertian sample keeps legacy attenuation"
+    )
+    assert(diffuseSpecular == false and diffuseEvent == nil,
+        "Lambertian sample event contract")
+    assertNear(
+        diffuseSamplePdf,
+        diffuse:pdf(record, outgoingDirection, diffuseSampleRay.direction),
+        0,
+        "Lambertian sampled PDF"
+    )
+
+    local polished = RT.Metal.new(Vec3.new(0.8, 0.8, 0.8), 0)
+    assert(polished:isDelta() == true, "polished Metal must be delta")
+    assertNear(polished:pdf(record, outgoingDirection, upperDirection), 0, 0,
+        "delta Metal continuous PDF")
+    assertVectorNear(
+        polished:evaluate(record, outgoingDirection, upperDirection),
+        Vec3.new(0, 0, 0),
+        0,
+        "delta Metal continuous evaluate"
+    )
+    local polishedLegacyRay = polished:scatter(incomingRay, record, RT.RNG.new(23))
+    local polishedSampleRay, _, _, _, polishedSamplePdf =
+        polished:sample(incomingRay, record, RT.RNG.new(23))
+    assertVectorNear(polishedSampleRay.direction, polishedLegacyRay.direction, 0,
+        "delta Metal sample keeps legacy direction")
+    assert(polishedSamplePdf == nil,
+        "delta Metal must not fake a continuous sampled PDF")
+
+    local rough = RT.Metal.new(Vec3.new(0.8, 0.7, 0.6), 0.25)
+    assert(rough:isDelta() == false, "rough Metal must be non-delta")
+    assert(rough:evaluate(record, outgoingDirection, upperDirection) == nil,
+        "legacy rough Metal evaluate remains unsupported until GGX")
+    assert(rough:pdf(record, outgoingDirection, upperDirection) == nil,
+        "legacy rough Metal PDF remains unsupported until GGX")
+
+    local glass = RT.Dielectric.new(1.5)
+    assert(glass:isDelta() == true, "Dielectric must be delta")
+    assertNear(glass:pdf(record, outgoingDirection, upperDirection), 0, 0,
+        "Dielectric continuous PDF")
+    assertVectorNear(
+        glass:evaluate(record, outgoingDirection, upperDirection),
+        Vec3.new(0, 0, 0),
+        0,
+        "Dielectric continuous evaluate"
+    )
+    local glassLegacyRay, glassLegacyAttenuation, glassLegacySpecular,
+        glassLegacyEvent = glass:scatter(incomingRay, record, RT.RNG.new(29))
+    local glassSampleRay, glassSampleAttenuation, glassSampleSpecular,
+        glassSampleEvent, glassSamplePdf =
+        glass:sample(incomingRay, record, RT.RNG.new(29))
+    assertVectorNear(glassSampleRay.direction, glassLegacyRay.direction, 0,
+        "Dielectric sample keeps legacy direction")
+    assertVectorNear(glassSampleAttenuation, glassLegacyAttenuation, 0,
+        "Dielectric sample keeps legacy attenuation")
+    assert(glassSampleSpecular == glassLegacySpecular
+            and glassSampleEvent == glassLegacyEvent,
+        "Dielectric sample keeps legacy event")
+    assert(glassSamplePdf == nil,
+        "Dielectric must not fake a continuous sampled PDF")
+
+    local light = RT.DiffuseLight.new(
+        RT.SolidColor.new(Vec3.new(1, 0.9, 0.8)),
+        2
+    )
+    assert(light:isDelta() == false, "area emission is not a delta BSDF")
+    assertNear(light:pdf(record, outgoingDirection, upperDirection), 0, 0,
+        "emission PDF")
+    assertVectorNear(
+        light:evaluate(record, outgoingDirection, upperDirection),
+        Vec3.new(0, 0, 0),
+        0,
+        "emission evaluate"
+    )
+    local lightRay, _, lightSpecular, _, lightPdf =
+        light:sample(incomingRay, record, RT.RNG.new(31))
+    assert(lightRay == nil and lightSpecular == false and lightPdf == 0,
+        "emission must not sample a BSDF direction")
+end
+
 local function testPathIntegrator()
     local scene = RT.Scene.new()
     scene:add(RT.Sphere.new(
@@ -1387,6 +1520,7 @@ testVectorMath()
 testRayAndSphere()
 testDeterministicRng()
 testMaterials()
+testJ1BSDFContract()
 testPathIntegrator()
 testDirectLightMaterialBoundary()
 testAOVCorrect5TransmissionDiagnostics()

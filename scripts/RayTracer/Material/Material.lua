@@ -15,6 +15,22 @@ function Material:albedoAt(_)
     return Vec3.new(1, 1, 1)
 end
 
+function Material:isDelta()
+    return false
+end
+
+function Material:sample(ray, record, rng)
+    return self:scatter(ray, record, rng)
+end
+
+function Material:evaluate(_, _, _)
+    return Vec3.new(0, 0, 0)
+end
+
+function Material:pdf(_, _, _)
+    return 0
+end
+
 function Material:scatter(ray, record, rng)
     return nil, nil
 end

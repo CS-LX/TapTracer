@@ -29,6 +29,23 @@ function Dielectric:albedoAt(_)
     return Vec3.new(1, 1, 1)
 end
 
+function Dielectric:isDelta()
+    return true
+end
+
+function Dielectric:sample(ray, record, rng)
+    local scattered, attenuation, isSpecular, event = self:scatter(ray, record, rng)
+    return scattered, attenuation, isSpecular, event, nil
+end
+
+function Dielectric:evaluate(_, _, _)
+    return Vec3.new(0, 0, 0)
+end
+
+function Dielectric:pdf(_, _, _)
+    return 0
+end
+
 function Dielectric:scatter(ray, record, rng)
     local attenuation = Vec3.new(1, 1, 1)
     local ratio = record.frontFace and (1 / self.refractionIndex) or self.refractionIndex

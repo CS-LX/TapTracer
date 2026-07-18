@@ -28,6 +28,22 @@ function DiffuseLight:emitted(record)
     return color * self.intensity
 end
 
+function DiffuseLight:isDelta()
+    return false
+end
+
+function DiffuseLight:sample(_, _, _)
+    return nil, nil, false, nil, 0
+end
+
+function DiffuseLight:evaluate(_, _, _)
+    return Vec3.new(0, 0, 0)
+end
+
+function DiffuseLight:pdf(_, _, _)
+    return 0
+end
+
 function DiffuseLight:scatter(_, record)
     return nil, nil
 end

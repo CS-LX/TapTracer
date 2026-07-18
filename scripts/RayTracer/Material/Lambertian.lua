@@ -36,6 +36,31 @@ function Lambertian:directLightAlbedo(record)
     return self:albedoAt(record)
 end
 
+function Lambertian:isDelta()
+    return false
+end
+
+function Lambertian:sample(ray, record, rng)
+    local scattered, attenuation, isSpecular, event = self:scatter(ray, record, rng)
+    local samplePdf = scattered ~= nil
+        and self:pdf(record, -ray.direction, scattered.direction) or 0
+    return scattered, attenuation, isSpecular, event, samplePdf
+end
+
+function Lambertian:evaluate(record, outgoingDirection, incomingDirection)
+    local normal = record.normal
+    local outgoingCosine = normal:dot(outgoingDirection:unit())
+    local incomingCosine = normal:dot(incomingDirection:unit())
+    if outgoingCosine <= 0 or incomingCosine <= 0 then
+        return Vec3.new(0, 0, 0)
+    end
+    return self:albedoAt(record) * (1 / math.pi)
+end
+
+function Lambertian:pdf(record, _, incomingDirection)
+    return math.max(0, record.normal:dot(incomingDirection:unit())) / math.pi
+end
+
 function Lambertian:scatter(ray, record, rng)
     local normal = record.normal
     local randomDirection = Vec3.randomUnitVector(rng)

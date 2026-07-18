@@ -462,24 +462,121 @@ job:GetStats()
 - HDR 高光具有连续层次，不再只依赖逐通道截断；
 - 所有 Presenter 对同一像素产生一致的 8-bit 结果。
 
-### 阶段 J：MIS 评估与按需实现
+### 阶段 J：MIS、统一 BSDF 与全视图低噪路线
 
-目标：在前述基准、累积采样和输出转换稳定后，判断 Multiple Importance Sampling 是否值得引入。
+目标：在 AOV 语义纠偏、渐进采样和预览显示链路稳定后，降低漫反射、光泽、金属及玻璃后续路径的采样方差，并为 transmission 专用引导降噪建立正确的数据基础。
 
-- 先使用阶段 F 的固定场景测量显式光源采样下的方差和收敛速度；
-- 对水面高光、小面积光源、漫反射间接光分别记录噪声表现；
-- 仅在基准证明收益明确时，实现光源采样与 BSDF 采样的 PDF；
-- 使用 power heuristic 或等价、可测试的权重；
-- 处理镜面/折射 delta 路径，避免对不可比较 PDF 强行加权；
-- 保持无 MIS 路径作为差分基线和回归开关；
-- 不在第一版引入通用材质图或过度抽象的采样框架。
+#### J.0：现有 AOV 对玻璃的适用边界
 
-验收：
+当前 Primary AOV 能改善 diffuse 和 glossy 表面，但不能直接安全地改善理想玻璃内部的透射噪声：
 
-- 固定样本预算下，指定基准区域的方差可测量下降；
+- 当前玻璃主命中记录的是玻璃表面的 Albedo、Normal、Depth 和 `delta_transmission` class；
+- 玻璃像素的 Beauty 实际来自 Fresnel 反射或折射后的后续路径，画面内容通常属于玻璃后方的地面、墙体、天空或灯光；
+- 因此主表面 Normal/Depth 与玻璃后方可见内容的几何边界并不对应；若直接使用现有 AOV 跨像素过滤玻璃，容易把不同折射内容混合，产生串色、重影、边界模糊或亮度漂移；
+- 当前 AOV 仍有价值：可作为 transmission mask、玻璃轮廓硬边界、材质分类和 coverage 门禁，但默认必须继续让 `delta_transmission` 直通；
+- 已完成的弱 transmission 显示候选仅使同类相邻亮度差下降约 `2.831%`，完整画面无可感知收益，证明仅复用主表面 AOV 不足以解决玻璃噪声；
+- 若要真正过滤玻璃内容，需要新增“折射后首次非 delta 命中”引导，至少记录 refracted first-hit Normal、Depth、Albedo、material class 和有效 coverage；这属于 transmission/path AOV 扩展，不等同于直接启用当前 Primary AOV。
+
+结论：现有 AOV 可保护玻璃边界并识别玻璃区域，但不能单独完成玻璃降噪。玻璃质量提升必须由采样方差降低和 transmission 专用引导共同完成。
+
+#### J.1：固定基准与统一 BSDF 契约（已完成，2026-07-18）
+
+- 保留当前无 MIS 路径作为差分基线和回归开关；
+- 固定 Poolcore Courtyard、Cornell Box 和材质组合场景，分别记录 diffuse、glossy、metal、glass 与高光区域的均值、方差、颗粒指标和完成成本；
+- 将非 delta 材质从单一 `scatter()` 扩展为最小统一契约：`sample()`、`evaluate()`、`pdf()`、`isDelta()`；
+- delta reflection/transmission 保留离散事件及 Fresnel 概率，不对不可比较的离散/连续 PDF 强行加权；
+- 不在第一版引入通用材质图、复杂闭包系统或无当前用途的抽象层。
+
+实现结果：
+
+- Lambertian、Metal、Dielectric、DiffuseLight 和基础 Material 已具备一致的 `sample/evaluate/pdf/isDelta` 方法名；
+- Lambertian 已提供 `albedo/π` 的 BSDF evaluation 和 cosine hemisphere PDF；`sample()` 仍委托现有 `scatter()`，因此当前采样方向、RNG 消耗和 Beauty 完全不变；
+- 完美 Metal 与 Dielectric 明确标记为 delta；连续方向上的 `evaluate()` 返回零、`pdf()` 返回零，而 `sample()` 的连续 `samplePdf` 返回 `nil`，避免伪造 Dirac delta 的普通概率密度；
+- 当前 rough Metal 的经验 fuzz 分布尚无严格可配对的 BSDF/PDF，因此契约明确返回 `nil` 表示“不支持 MIS”，等待 J.3 GGX 替换；不使用猜测 PDF；
+- DiffuseLight 明确不提供可散射 BSDF 方向，sample 返回空方向和零 PDF；
+- PathIntegrator 继续只调用原有 `scatter()`，本阶段没有接入 MIS、没有改变 radiance、RNG、shadow ray 或 BVH 查询；
+- 自动回归验证了 Lambertian evaluation/PDF、上下半球边界、delta 连续 PDF 语义、rough Metal 未支持状态，以及相同 RNG 下 `sample()` 与 legacy `scatter()` 的方向、衰减和 Dielectric 事件完全一致；
+- Lua LSP 全工作区 0 Error；RayTracer 回归输出 `[RayTracerTests] all tests passed`；官方项目构建成功。
+
+已通过门禁：
+
+- 新旧接口在关闭 MIS 时产生相同的固定 seed Beauty 基线；
+- PDF 非负、有限且与采样分布匹配；
+- 不产生 NaN、Inf、负概率或重复发光贡献。
+
+#### J.2：Lambertian NEE + MIS
+
+- 将当前简化显式光源采样升级为可计算 light PDF 的标准 NEE；
+- Lambertian 使用 cosine-weighted hemisphere sampling，并提供对应的 BSDF evaluation 与 PDF；
+- 同时计算 light-sampling 与 BSDF-sampling 两种估计；
+- 使用 power heuristic 合并权重；
+- BSDF 路径直接命中发光体时按 MIS 权重计入 emission，避免与 NEE 重复计算；
+- 玻璃 delta bounce 之后首次命中 diffuse 时，同样允许该 diffuse 顶点执行 NEE/MIS，从而降低透过玻璃后照明的方差。
+
+预期收益：
+
+- 白墙、棋盘格地面和其他漫反射区域的直接光噪声明显下降；
+- 透过玻璃后落到 diffuse 表面的路径更容易找到面光源；
+- 不承诺直接消除理想玻璃轮廓、Fresnel 分支或焦散噪声。
+
+#### J.3：GGX 金属与光泽 MIS
+
+- 用 GGX 微表面 BRDF 替换当前 `reflected + randomUnitVector * fuzz` 的经验扰动；
+- 实现 GGX NDF、Smith masking-shadowing、Schlick Fresnel，以及与实现匹配的重要性采样和 PDF；
+- 粗糙金属/光泽参与 light sampling 与 BSDF sampling 的 MIS；
+- 完美镜面金属继续作为 delta reflection，不强行参与连续 PDF MIS；
+- 使用金属球、高粗糙度球和小面积高光区域建立独立回归。
+
+预期收益：
+
+- 金属和光泽高光更稳定、更符合能量分布；
+- 相同 spp 下高光颗粒和随机亮斑下降；
+- 为后续粗糙玻璃提供一致的微表面接口基础。
+
+#### J.4：transmission/path AOV 与玻璃显示降噪
+
+- 主表面 Primary AOV 保持不变，继续用于玻璃 mask、轮廓和材质边界；
+- 沿当前 sample 已选择的反射/折射路径复用既有 hit，不为采集 AOV 增加额外求交；
+- 对折射分支记录首次非 delta 命中的 Normal、Depth、Albedo、material class、coverage 和有效标记；
+- 条件允许时拆分 reflection/transmission 显示贡献或最小 lobe radiance，避免用同一组引导混合不相关路径；
+- transmission 过滤只在 refracted guides 兼容时传播，并以主玻璃轮廓作为硬边界；
+- 原始线性 HDR Film 永远不被降噪器修改；所有过滤仍只作用于独立显示副本；
+- 不恢复已经证明收益不足的固定 `20%` 邻域混合候选。
+
+门禁：
+
+- 玻璃轮廓、折射后的棋盘格边界和遮挡边界不产生明显重影或串色；
+- 玻璃区域平均亮度变化目标不超过 `5%`，并记录局部最大偏差；
+- 开关 transmission 降噪时 Film、路径数、BVH 统计和 RNG 顺序完全一致；
+- 固定样本预算下玻璃区域颗粒指标必须有可感知且可量化的下降，否则回退为直通。
+
+#### J.5：自适应采样、firefly 与焦散专项
+
+在 MIS 和 transmission/path AOV 验收后，再按数据决定是否实施：
+
+- 根据 Film 均值方差和材质 class，将额外 sample 优先分配给玻璃、高光和高方差区域；
+- 自适应停止必须设置最小 spp、最大 spp 和邻域稳定条件，避免边缘欠采样；
+- 极端离群亮点只允许在显示副本使用基于局部统计的鲁棒权重或保守 firefly 控制，不修改无偏 Film；
+- 若剩余噪声主要属于 `Light → Glass → Diffuse → Camera` 焦散路径，则普通相机路径 MIS 收益有限；只有基准证明焦散是主要质量瓶颈时，再评估 path guiding、photon mapping 或 bidirectional 方法；
+- 不为当前 Poolcore 预览提前引入高复杂度焦散算法。
+
+#### 阶段 J 执行顺序
+
+严格按以下顺序推进，禁止把多个质量变量混入同一次基准：
+
+1. `J.1` 统一 BSDF 契约与固定基线；
+2. `J.2` Lambertian NEE + MIS；
+3. `J.3` GGX 金属/光泽 + MIS；
+4. `J.4` transmission/path AOV 与玻璃显示降噪；
+5. `J.5` 自适应采样与必要的 firefly/焦散专项。
+
+总体验收：
+
+- 固定样本预算下，指定 diffuse、glossy、metal 和 glass 区域的方差可测量下降；
 - MIS 不改变期望亮度，不重复计算发光贡献；
 - 镜面、折射、漫反射和直接可见光源行为正确；
-- 若实测收益不足以抵消复杂度，则记录结论并停止实现，而不是为了路线完整强行加入。
+- 全视图在保持材质边界、折射结构和高光层次的前提下，噪点显著少于当前 `32 spp` 基线；
+- 每个子阶段收益不足时记录数据并停止该候选，不为路线完整强行增加复杂度。
 
 ### 后续阶段执行顺序与门禁
 
