@@ -537,13 +537,31 @@ job:GetStats()
 - 透过玻璃后落到 diffuse 表面的路径更容易找到面光源；
 - 不承诺直接消除理想玻璃轮廓、Fresnel 分支或焦散噪声。
 
-#### J.3：GGX 金属与光泽 MIS
+#### J.3：GGX 金属与光泽 MIS（已完成，2026-07-18）
 
 - 用 GGX 微表面 BRDF 替换当前 `reflected + randomUnitVector * fuzz` 的经验扰动；
 - 实现 GGX NDF、Smith masking-shadowing、Schlick Fresnel，以及与实现匹配的重要性采样和 PDF；
 - 粗糙金属/光泽参与 light sampling 与 BSDF sampling 的 MIS；
 - 完美镜面金属继续作为 delta reflection，不强行参与连续 PDF MIS；
 - 使用金属球、高粗糙度球和小面积高光区域建立独立回归。
+
+实现结果：
+
+- rough Metal 已使用 GGX/Trowbridge-Reitz NDF、Smith masking-shadowing 和 Schlick Fresnel；
+- GGX 半向量重要性采样与反射方向 PDF 匹配，路径吞吐使用 `BSDF × cos / PDF`；
+- PathIntegrator 的直接光路径已改为通用 `evaluate × emission × cos / lightPdf`，Lambertian 与 rough Metal 共用 light/BSDF power-heuristic MIS；
+- 完美镜面金属继续保持 delta reflection，连续 `evaluate/pdf` 返回零，不参与连续 MIS；
+- `useMIS=false` 时保留原有兼容路径，没有引入通用材质图或额外闭包系统。
+
+人工 Preview 验收（2026-07-18）：
+
+- 用户在相同采样预算下观察到金属球反射倒影不再那么模糊，主观清晰度约提升 `10%`；该比例为肉眼估计，不作为脚本量化值；
+- 未观察到明显异常亮点；
+- 金属球没有整体变黑或过亮；
+- 相同采样预算下颗粒没有显著恶化；
+- 用户确认清晰度变化不是由画面亮度或截图缩放差异造成。
+
+结论：J.3 的代码闭环、静态检查、正式构建和人工 Preview 验收均已完成；当前证据支持 GGX 改善了金属反射结构，同时未引入可感知的亮度或颗粒回归。
 
 预期收益：
 

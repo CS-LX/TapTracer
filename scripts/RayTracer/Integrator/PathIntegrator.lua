@@ -50,9 +50,12 @@ end
 local function sampleDirectLight(
         scene, record, material, outgoingDirection, rng, stats, useMIS)
     local lights = scene.lights
-    if lights == nil or #lights == 0
-            or material == nil
-            or type(material.directLightAlbedo) ~= "function" then
+    if lights == nil or #lights == 0 or material == nil then
+        return Vec3.new(0, 0, 0)
+    end
+    local canEvaluate = useMIS and type(material.evaluate) == "function"
+    local canUseLegacy = type(material.directLightAlbedo) == "function"
+    if not canEvaluate and not canUseLegacy then
         return Vec3.new(0, 0, 0)
     end
 
@@ -88,19 +91,26 @@ local function sampleDirectLight(
         material = light.material,
     }
     local emitted = light.material:emitted(lightRecord)
-    local albedo = material:directLightAlbedo(record)
-    local geometry = surfaceCosine * lightCosine / distanceSquared
-    local weight = #lights * geometry / (math.pi * areaPdf)
-    if useMIS and type(material.pdf) == "function" then
+    local lightPdf = areaPdf * distanceSquared
+        / (lightCosine * #lights)
+    local contribution
+    if canEvaluate then
+        local bsdf = material:evaluate(record, outgoingDirection, direction)
+        contribution = bsdf * emitted * (surfaceCosine / lightPdf)
+    else
+        local albedo = material:directLightAlbedo(record)
+        contribution = albedo * emitted
+            * (#lights * surfaceCosine * lightCosine
+                / (math.pi * areaPdf * distanceSquared))
+    end
+    if canEvaluate and type(material.pdf) == "function" then
         local bsdfPdf = material:pdf(record, outgoingDirection, direction)
         if type(bsdfPdf) == "number" and bsdfPdf > 0 then
-            local lightPdf = areaPdf * distanceSquared
-                / (lightCosine * #lights)
-            weight = weight * powerHeuristic(lightPdf, bsdfPdf)
+            contribution = contribution * powerHeuristic(lightPdf, bsdfPdf)
             stats.misLightSamples = stats.misLightSamples + 1
         end
     end
-    return albedo * emitted * weight
+    return contribution
 end
 
 local PathIntegrator = {}
@@ -305,7 +315,12 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
         radianceB = radianceB + attenuationB * direct.z
 
         local scattered, albedo, isSpecular, scatterEvent
-        if integrator.useMIS and materialClass == "diffuse" then
+        local supportsContinuousMIS = integrator.useMIS
+            and type(record.material.sample) == "function"
+            and type(record.material.pdf) == "function"
+            and type(record.material.isDelta) == "function"
+            and not record.material:isDelta()
+        if supportsContinuousMIS then
             local sampledRay, sampledAlbedo, sampledSpecular, sampledEvent, sampledPdf =
                 record.material:sample(currentRay, record, rng)
             scattered = sampledRay
