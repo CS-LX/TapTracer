@@ -5,13 +5,15 @@ local PrimaryAOV = require "RayTracer.Display.PrimaryAOV"
 local AOVAtrous = require "RayTracer.Display.AOVAtrous"
 local RenderController = require "RayTracer.Runtime.RenderController"
 local InspectorUI = require "RayTracer.UI.InspectorUI"
+local SceneCatalog = require "RayTracer.Scenes.SceneCatalog"
+local MaterialShowcase = SceneCatalog.active
 local UI = require("urhox-libs/UI")
 
 local ACTIVE_QUALITY = "preview"
 local ACTIVE_PRESET = QualityPresets.get(ACTIVE_QUALITY)
 
 local CONFIG = {
-    title = "CPU Ray Tracer · Poolcore Courtyard",
+    title = MaterialShowcase.title,
     quality = ACTIVE_QUALITY,
     width = ACTIVE_PRESET.width,
     height = ACTIVE_PRESET.height,
@@ -77,142 +79,12 @@ local DISPLAY_MARGIN = 24
 local J6_SEED = 42
 local J6_EXPOSURE = 1.0
 
-local function addBox(scene, minimum, maximum, material)
-    local Vec3 = RayTracer.Vec3
-    local minX = minimum.x
-    local minY = minimum.y
-    local minZ = minimum.z
-    local maxX = maximum.x
-    local maxY = maximum.y
-    local maxZ = maximum.z
-
-    scene:add(RayTracer.Quad.new(
-        Vec3.new(minX, minY, minZ),
-        Vec3.new(maxX - minX, 0, 0),
-        Vec3.new(0, maxY - minY, 0),
-        material
-    ))
-    scene:add(RayTracer.Quad.new(
-        Vec3.new(minX, minY, maxZ),
-        Vec3.new(maxX - minX, 0, 0),
-        Vec3.new(0, maxY - minY, 0),
-        material
-    ))
-    scene:add(RayTracer.Quad.new(
-        Vec3.new(minX, minY, minZ),
-        Vec3.new(0, maxY - minY, 0),
-        Vec3.new(0, 0, maxZ - minZ),
-        material
-    ))
-    scene:add(RayTracer.Quad.new(
-        Vec3.new(maxX, minY, maxZ),
-        Vec3.new(0, maxY - minY, 0),
-        Vec3.new(0, 0, minZ - maxZ),
-        material
-    ))
-    scene:add(RayTracer.Quad.new(
-        Vec3.new(minX, minY, minZ),
-        Vec3.new(0, 0, maxZ - minZ),
-        Vec3.new(maxX - minX, 0, 0),
-        material
-    ))
-    scene:add(RayTracer.Quad.new(
-        Vec3.new(minX, maxY, minZ),
-        Vec3.new(maxX - minX, 0, 0),
-        Vec3.new(0, 0, maxZ - minZ),
-        material
-    ))
-end
-
 local function buildCamera(config)
-    local Vec3 = RayTracer.Vec3
-    camera_ = RayTracer.Camera.new {
-        aspectRatio = config.width / config.height,
-        imageWidth = config.width,
-        verticalFov = 55,
-        lookFrom = Vec3.new(0, 3.6, -8.5),
-        lookAt = Vec3.new(0, 2.0, 7.0),
-        up = Vec3.new(0, 1, 0),
-        defocusAngle = 0,
-    }
+    camera_ = MaterialShowcase.buildCamera(config)
 end
 
 local function buildScene()
-    local Vec3 = RayTracer.Vec3
-    local SolidColor = RayTracer.SolidColor
-    local whiteTile = RayTracer.Lambertian.new(
-        SolidColor.new(Vec3.new(0.92, 0.95, 0.94))
-    )
-    local paleStone = RayTracer.Lambertian.new(Vec3.new(0.82, 0.88, 0.87))
-    local poolTile = RayTracer.Lambertian.new(RayTracer.Checker.new(
-        0.55,
-        SolidColor.new(Vec3.new(0.18, 0.67, 0.70)),
-        SolidColor.new(Vec3.new(0.32, 0.82, 0.78))
-    ))
-    local glass = RayTracer.Dielectric.new(1.5)
-    local metal = RayTracer.Metal.new(Vec3.new(0.92, 0.95, 0.98), 0.08)
-    local coral = RayTracer.Lambertian.new(Vec3.new(0.95, 0.22, 0.28))
-    local sunshine = RayTracer.Lambertian.new(Vec3.new(0.98, 0.72, 0.12))
-    local skyBlue = RayTracer.Lambertian.new(Vec3.new(0.12, 0.46, 0.92))
-    local lavender = RayTracer.Lambertian.new(Vec3.new(0.65, 0.35, 0.90))
-    local sunLight = RayTracer.DiffuseLight.new(
-        SolidColor.new(Vec3.new(1.0, 0.96, 0.82)),
-        6.0
-    )
-
-    scene_ = RayTracer.Scene.new()
-
-    -- 开放式池核庭院：长水池、低矮白墙、重复门架和大片天空。
-    scene_:add(RayTracer.Quad.new(
-        Vec3.new(-12, -0.35, -5),
-        Vec3.new(0, 0, 27),
-        Vec3.new(24, 0, 0),
-        paleStone
-    ))
-    scene_:add(RayTracer.Quad.new(
-        Vec3.new(-5.5, -0.28, -2),
-        Vec3.new(11, 0, 0),
-        Vec3.new(0, 0, 20),
-        poolTile
-    ))
-
-    -- 两侧白色瓷砖墙保持低矮，让天空占据画面上半部。
-    addBox(scene_, Vec3.new(-9.0, 0, -2), Vec3.new(-7.7, 2.3, 19), whiteTile)
-    addBox(scene_, Vec3.new(7.7, 0, -2), Vec3.new(9.0, 2.3, 19), whiteTile)
-    addBox(scene_, Vec3.new(-7.7, 0, 18), Vec3.new(7.7, 2.3, 19.2), whiteTile)
-
-    -- 远处重复门架形成池核长透视，不封顶。
-    local archDepths = { 5.5, 10.5, 15.5 }
-    for i = 1, #archDepths do
-        local z = archDepths[i]
-        addBox(scene_, Vec3.new(-7.2, 0, z), Vec3.new(-6.45, 5.2, z + 0.7), whiteTile)
-        addBox(scene_, Vec3.new(6.45, 0, z), Vec3.new(7.2, 5.2, z + 0.7), whiteTile)
-        addBox(scene_, Vec3.new(-7.2, 4.45, z), Vec3.new(7.2, 5.2, z + 0.7), whiteTile)
-    end
-
-    -- 高位大面光模拟柔和日光，保持开放空间的干净亮度。
-    scene_:add(RayTracer.Quad.new(
-        Vec3.new(-5.0, 9.0, -12.0),
-        Vec3.new(10.0, 0, 0),
-        Vec3.new(0, 0, 8.0),
-        sunLight
-    ))
-
-    -- 彩色装饰球错落分布在浅水与池边。
-    scene_:add(RayTracer.Sphere.new(Vec3.new(-3.2, 0.8, 3.2), 0.8, coral))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(2.4, 0.65, 5.6), 0.65, sunshine))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(-1.0, 1.05, 9.0), 1.05, skyBlue))
-    scene_:add(RayTracer.Sphere.new(Vec3.new(4.2, 0.55, 12.2), 0.55, lavender))
-
-    -- 视野近处的玻璃块与金属球，用于观察折射、反射和材质边界。
-    addBox(
-        scene_,
-        Vec3.new(-3.5, 0.0, -0.2),
-        Vec3.new(-0.2, 3.1, 3.1),
-        glass
-    )
-    scene_:add(RayTracer.Sphere.new(Vec3.new(2.0, 1.35, 1.2), 1.35, metal))
-
+    scene_ = MaterialShowcase.build()
     local bvh = scene_:buildBVH()
     local bvhStats = bvh:getStats()
     print(string.format(
@@ -222,16 +94,6 @@ local function buildScene()
         bvhStats.leafCount,
         bvhStats.maxDepth
     ))
-
-    camera_ = RayTracer.Camera.new {
-        aspectRatio = CONFIG.width / CONFIG.height,
-        imageWidth = CONFIG.width,
-        verticalFov = 55,
-        lookFrom = Vec3.new(0, 3.6, -8.5),
-        lookAt = Vec3.new(0, 2.0, 7.0),
-        up = Vec3.new(0, 1, 0),
-        defocusAngle = 0,
-    }
 end
 
 local function buildRenderer(config)
@@ -251,7 +113,7 @@ local function buildRenderer(config)
         end,
         integrator = RayTracer.PathIntegrator.new {
             maxDepth = config.maxDepth,
-            background = RayTracer.Vec3.new(0.16, 0.42, 0.92),
+            background = MaterialShowcase.background,
             useMIS = true,
         },
     }
@@ -532,7 +394,7 @@ local function buildUI()
         width = "100%",
         bottom = 54,
         height = 36,
-        text = "初始化中 · Poolcore Courtyard",
+        text = "初始化中 · " .. MaterialShowcase.statusName,
         fontSize = 14,
         fontColor = { 206, 224, 244, 255 },
         textAlign = "center",
@@ -1007,7 +869,7 @@ function HandleUpdate(eventType, eventData)
         if pendingDisplayUpload_ then
             uploadDisplayTexture()
         end
-        statusLabel:SetText("渲染完成 · Poolcore Courtyard")
+        statusLabel:SetText("渲染完成 · " .. MaterialShowcase.statusName)
         progressBar:SetValue(1)
         reportedComplete_ = true
         printRenderStats(renderer_)
