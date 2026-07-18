@@ -18,6 +18,13 @@ function Metal:emitted(_)
     return Vec3.new(0, 0, 0)
 end
 
+function Metal:denoiseClass(_)
+    if self.fuzz <= 1e-6 then
+        return "delta_reflection"
+    end
+    return "glossy"
+end
+
 function Metal:albedoAt(_)
     return self.albedo
 end

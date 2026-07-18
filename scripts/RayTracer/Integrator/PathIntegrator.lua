@@ -12,7 +12,9 @@ local RussianRoulette = require "RayTracer.Integrator.RussianRoulette"
 ---@field maxDepth number
 local function sampleDirectLight(scene, record, material, rng, stats)
     local lights = scene.lights
-    if lights == nil or #lights == 0 or material == nil or material.albedoAt == nil then
+    if lights == nil or #lights == 0
+            or material == nil
+            or type(material.directLightAlbedo) ~= "function" then
         return Vec3.new(0, 0, 0)
     end
 
@@ -48,7 +50,7 @@ local function sampleDirectLight(scene, record, material, rng, stats)
         material = light.material,
     }
     local emitted = light.material:emitted(lightRecord)
-    local albedo = material:albedoAt(record)
+    local albedo = material:directLightAlbedo(record)
     local geometry = surfaceCosine * lightCosine / distanceSquared
     local weight = #lights * geometry / (math.pi * areaPdf)
     return albedo * emitted * weight

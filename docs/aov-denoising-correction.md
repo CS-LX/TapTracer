@@ -41,7 +41,12 @@
 Clamp / Image / Texture2D
 ```
 
-但当前实现仍是“AOV 引导的多尺度空洞双边滤波原型”，不是语义完整的标准 AOV 降噪器。已确认的主要症状是：开启降噪后，Dielectric 水面中的少量高能反射/透射样本被扩散到较大区域，导致整片水面明显变亮。该变化不是可信的收敛结果，属于显示端降噪偏差。
+但当前实现仍是“AOV 引导的多尺度空洞双边滤波原型”，不是语义完整的标准 AOV 降噪器。调查曾将水面整体变亮主要归因于显示滤波，后续事故复核确认这是两个问题叠加：
+
+1. `069601e` 为 Dielectric 增加 `albedoAt()` 以采集 AOV 后，`sampleDirectLight()` 错误地以“存在 `albedoAt()`”作为漫反射直接光资格，使水面获得不属于 delta BSDF 的 Lambertian 直接光；该能量写入原始 Beauty Film，因此 denoise 开关两侧都会变亮；
+2. Correct-2 之前的显示滤波又会把部分高能反射/透射样本扩散到邻域，使 denoise-on 结果进一步发白。
+
+当前修复已把 Beauty 直接光接口与 AOV Albedo 解耦：只有 Lambertian 提供 `directLightAlbedo()` 并参与现有 NEE 公式；Dielectric 的 `albedoAt()` 仅供 AOV 使用，不再改变 radiance 或 shadow-ray 路径。Correct-2 的 delta 直通继续负责阻止显示端二次扩散。
 
 ## 4. 偏差与修复可行性
 
@@ -320,22 +325,29 @@ Clamp / Image / Texture2D
 - Tile budget 不改变最终 AOV；
 - AOV 不再由最后一个 sample 覆盖，miss 也不会清空此前有效特征。
 
-### AOV-Correct-2：材质分类与 delta 保守策略
+### AOV-Correct-2：材质分类与 delta 保守策略（已完成，2026-07-18）
 
 目标：停止错误过滤镜面、透射和发光表面。
 
-- 为材质提供明确的 denoise/AOV class；
-- diffuse、glossy、delta reflection、delta transmission、emission 分组；
-- 不同 class 之间权重为 0；
-- delta/emission 默认直通或仅弱 step=1；
-- 尝试沿实际 delta sample 路径记录首次非 delta 特征；
-- 若特征跟踪未通过亮度门禁，回退保守直通。
+已实现：
 
-门禁：
+- 材质已提供稳定 denoise class：Lambertian=`diffuse`、有 fuzz 的 Metal=`glossy`、完美 Metal=`delta_reflection`、Dielectric=`delta_transmission`、DiffuseLight=`emission`；
+- Renderer 在现有首次命中回调中把 class 写入 PrimaryAOV，不增加 `scene:hit()`；
+- Beauty Film 事故已修复：当前 Lambertian NEE 只接受 `directLightAlbedo()`，不再把 AOV 的 `albedoAt()` 当作直接光资格；Dielectric 保留 AOV Albedo，但不会获得漫反射直接光或额外 shadow ray；
+- PrimaryAOV 逐 sample 累积 class；同一像素出现多个命中 class 时标记为 `mixed`，避免在几何或材质边界错误过滤；
+- A-Trous 只过滤 `diffuse` 和 `glossy`，且邻域 class 必须与中心 class 完全相同；
+- `delta_reflection`、`delta_transmission`、`emission`、`mixed`、`unknown` 和 miss 均逐通道精确直通原始 Film 显示副本；
+- 未实现 delta 后首次非 delta 特征跟踪：本阶段先采用计划中的保守直通回退，以亮度稳定优先；仅当直通方案仍不能满足后续 Preview 质量目标时再评估该扩展；
+- 自动化测试已覆盖材质分类、class 的阻塞/分步/reset 一致性、跨 class 硬边界、所有保守 class 的逐通道精确直通、Renderer 到 AOV 的分类传播、Dielectric 直接光拒绝，以及启用 AOV 回调前后 Beauty radiance 完全一致；
+- Lua LSP 为 0 Error，RayTracer 专项断言全部通过，项目构建成功。
 
-- Dielectric 水面开启降噪后不再产生大范围提亮；
-- 彩球、墙面与水面边界无跨材质颜色泄漏；
-- 关闭降噪时仍直接显示原始 Film。
+已通过黑盒门禁：
+
+- Dielectric 水面已恢复正确的 Beauty Film 基线，开启降噪后不再产生大范围提亮；
+- 保守直通使水面在 denoise on/off 下保持一致；
+- 彩球、墙面与水面边界未观察到跨材质颜色泄漏；
+- 关闭降噪时仍直接显示原始 Film；
+- Poolcore Courtyard 黑盒视觉验收已通过，可以进入 AOV-Correct-3。
 
 ### AOV-Correct-3：方差与边缘停止函数
 
@@ -415,6 +427,7 @@ Clamp / Image / Texture2D
 
 - 当前 AOV A-Trous 原型保留为问题复现和差分基线，不作为可信完成态；
 - `AOV-Correct-1` 已完成：AOV sample 累积、有效命中平均、coverage 和调度一致性测试均已落地；
-- 下一开发阶段固定为 `AOV-Correct-2`，加入材质分类并优先消除 Dielectric 水面亮度漂移；
+- `AOV-Correct-2` 已完成：材质分类、delta/emission 保守直通、Beauty/AOV 接口解耦、自动化回归与 Poolcore Courtyard 黑盒视觉门禁均已通过；
+- 下一开发阶段固定为 `AOV-Correct-3`：引入亮度方差与更严格的边缘停止函数；
 - 完整 lobe 拆分、Albedo demodulation 和 5×5 kernel 均后置，不阻塞首轮纠偏；
 - 在 AOV-Correct-1～3 完成前，不继续通过放宽颜色权重或增加滤波轮数追求更平滑画面。

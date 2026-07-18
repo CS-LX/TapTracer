@@ -237,6 +237,13 @@ function Renderer:getStats()
     }
 end
 
+local function getPrimaryDenoiseClass(material, record)
+    if material ~= nil and type(material.denoiseClass) == "function" then
+        return material:denoiseClass(record)
+    end
+    return "unknown"
+end
+
 local function getPrimaryAlbedo(material, record)
     if material ~= nil and type(material.albedoAt) == "function" then
         return material:albedoAt(record)
@@ -253,6 +260,7 @@ function Renderer:renderPixel(pixelIndex, sampleIndex)
         if primaryRecord ~= nil and primaryRecord.material ~= nil then
             self.aov:set(x, y, {
                 hit = true,
+                class = getPrimaryDenoiseClass(primaryRecord.material, primaryRecord),
                 albedo = getPrimaryAlbedo(primaryRecord.material, primaryRecord),
                 normal = primaryRecord.normal,
                 depth = primaryRecord.t,

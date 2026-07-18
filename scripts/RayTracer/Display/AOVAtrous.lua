@@ -1,5 +1,10 @@
 local AOVAtrous = {}
 
+local FILTERABLE_CLASSES = {
+    diffuse = true,
+    glossy = true,
+}
+
 local KERNEL = {
     { -1, -1, 1 }, { 0, -1, 2 }, { 1, -1, 1 },
     { -1, 0, 2 }, { 0, 0, 4 }, { 1, 0, 2 },
@@ -71,7 +76,8 @@ function AOVAtrous.filter(film, aov, iterations)
                 local centerIndex = pixelIndex(width, x, y)
                 local center = source[centerIndex]
                 local centerHit, centerAlbedo, centerNormal, centerDepth = aov:get(x, y)
-                if not centerHit then
+                local centerClass = aov:getDenoiseClass(x, y)
+                if not centerHit or not FILTERABLE_CLASSES[centerClass] then
                     target[centerIndex] = center
                 else
                     local red = 0
@@ -86,7 +92,8 @@ function AOVAtrous.filter(film, aov, iterations)
                                 and sampleY >= 0 and sampleY < height then
                             local sampleIndex = pixelIndex(width, sampleX, sampleY)
                             local sampleHit, sampleAlbedo, sampleNormal, sampleDepth = aov:get(sampleX, sampleY)
-                            if sampleHit then
+                            local sampleClass = aov:getDenoiseClass(sampleX, sampleY)
+                            if sampleHit and sampleClass == centerClass then
                                 local sample = source[sampleIndex]
                                 local weight = guidedWeight(
                                     center,

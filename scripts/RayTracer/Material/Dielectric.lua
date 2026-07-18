@@ -21,6 +21,10 @@ function Dielectric:emitted(_)
     return Vec3.new(0, 0, 0)
 end
 
+function Dielectric:denoiseClass(_)
+    return "delta_transmission"
+end
+
 function Dielectric:albedoAt(_)
     return Vec3.new(1, 1, 1)
 end

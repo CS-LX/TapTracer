@@ -7,6 +7,10 @@ function Material.new()
     return setmetatable({}, Material)
 end
 
+function Material:denoiseClass(_)
+    return "unknown"
+end
+
 function Material:albedoAt(_)
     return Vec3.new(1, 1, 1)
 end

@@ -24,8 +24,16 @@ function Lambertian:emitted(_)
     return Vec3.new(0, 0, 0)
 end
 
+function Lambertian:denoiseClass(_)
+    return "diffuse"
+end
+
 function Lambertian:albedoAt(record)
     return self.texture:value(record)
+end
+
+function Lambertian:directLightAlbedo(record)
+    return self:albedoAt(record)
 end
 
 function Lambertian:scatter(ray, record, rng)

@@ -16,6 +16,7 @@ function PrimaryAOV.new(width, height)
     local depth = {}
     local sampleCount = {}
     local hitCount = {}
+    local denoiseClass = {}
     for index = 1, size do
         albedo[index] = zeroVector()
         normalSum[index] = zeroVector()
@@ -24,6 +25,7 @@ function PrimaryAOV.new(width, height)
         depth[index] = 0
         sampleCount[index] = 0
         hitCount[index] = 0
+        denoiseClass[index] = "miss"
     end
     return setmetatable({
         width = width,
@@ -35,6 +37,7 @@ function PrimaryAOV.new(width, height)
         depth = depth,
         sampleCount = sampleCount,
         hitCount = hitCount,
+        denoiseClass = denoiseClass,
     }, PrimaryAOV)
 end
 
@@ -51,6 +54,7 @@ function PrimaryAOV:clear()
         self.depth[index] = 0
         self.sampleCount[index] = 0
         self.hitCount[index] = 0
+        self.denoiseClass[index] = "miss"
     end
 end
 
@@ -63,6 +67,13 @@ function PrimaryAOV:set(x, y, sample)
 
     local hits = self.hitCount[index] + 1
     local inverseHits = 1 / hits
+    local sampleClass = sample.class or "unknown"
+    if hits == 1 then
+        self.denoiseClass[index] = sampleClass
+    elseif self.denoiseClass[index] ~= sampleClass then
+        self.denoiseClass[index] = "mixed"
+    end
+
     local albedo = sample.albedo or zeroVector()
     local albedoAverage = self.albedo[index]
     albedoAverage.x = albedoAverage.x + (albedo.x - albedoAverage.x) * inverseHits
@@ -108,6 +119,10 @@ function PrimaryAOV:get(x, y)
     local samples = self.sampleCount[index]
     local coverage = samples > 0 and hits / samples or 0
     return true, self.albedo[index], self.normal[index], self.depth[index], coverage
+end
+
+function PrimaryAOV:getDenoiseClass(x, y)
+    return self.denoiseClass[self:index(x, y)]
 end
 
 function PrimaryAOV:getHit(x, y)

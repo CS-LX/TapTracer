@@ -12,6 +12,10 @@ function DiffuseLight.new(emitTexture, intensity)
     }, DiffuseLight)
 end
 
+function DiffuseLight:denoiseClass(_)
+    return "emission"
+end
+
 function DiffuseLight:albedoAt(record)
     return self.emitTexture:value(record)
 end

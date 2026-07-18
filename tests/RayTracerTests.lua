@@ -1,6 +1,7 @@
 local RT = require "RayTracer"
 local QualityPresets = require "RayTracer.Config.QualityPresets"
 local DisplayDenoise = require "RayTracer.Display.DisplayDenoise"
+local AOVAtrous = require "RayTracer.Display.AOVAtrous"
 local PrimaryAOV = require "RayTracer.Display.PrimaryAOV"
 
 local function assertNear(actual, expected, epsilon, label)
@@ -125,6 +126,10 @@ local function assertAOVsMatch(first, second)
         for x = 0, first.width - 1 do
             assertNear(first:getSampleCount(x, y), second:getSampleCount(x, y), 0, "AOV sample count match")
             assertNear(first:getHitCount(x, y), second:getHitCount(x, y), 0, "AOV hit count match")
+            assert(
+                first:getDenoiseClass(x, y) == second:getDenoiseClass(x, y),
+                "AOV denoise class should match"
+            )
             local firstHit, firstAlbedo, firstNormal, firstDepth, firstCoverage = first:get(x, y)
             local secondHit, secondAlbedo, secondNormal, secondDepth, secondCoverage = second:get(x, y)
             assert(firstHit == secondHit, "AOV hit presence should match")
@@ -326,6 +331,7 @@ local function testMaterials()
 
     local diffuseColor = Vec3.new(0.7, 0.2, 0.1)
     local diffuse = RT.Lambertian.new(diffuseColor)
+    assert(diffuse:denoiseClass(record) == "diffuse", "Lambertian denoise class")
     local diffuseRay, diffuseAttenuation = diffuse:scatter(incoming, record, RT.RNG.new(5))
     assert(diffuseRay ~= nil, "Lambertian should always scatter")
     assertVectorNear(diffuseAttenuation, diffuseColor, 1e-8, "Lambertian attenuation")
@@ -333,14 +339,17 @@ local function testMaterials()
 
     local polished = RT.Metal.new(Vec3.new(0.8, 0.8, 0.8), -1)
     assertNear(polished.fuzz, 0, 0, "Metal minimum fuzz")
+    assert(polished:denoiseClass(record) == "delta_reflection", "polished Metal denoise class")
     local rough = RT.Metal.new(Vec3.new(0.8, 0.8, 0.8), 2)
     assertNear(rough.fuzz, 1, 0, "Metal maximum fuzz")
+    assert(rough:denoiseClass(record) == "glossy", "rough Metal denoise class")
     local metalRay, metalAttenuation = polished:scatter(incoming, record, RT.RNG.new(5))
     assert(metalRay ~= nil, "Metal should reflect front-facing ray")
     assert(metalRay.direction:dot(record.normal) > 0, "Metal reflection should leave surface")
     assertVectorNear(metalAttenuation, Vec3.new(0.8, 0.8, 0.8), 1e-8, "Metal attenuation")
 
     local glass = RT.Dielectric.new(1.5)
+    assert(glass:denoiseClass(record) == "delta_transmission", "Dielectric denoise class")
     local glassRay, glassAttenuation = glass:scatter(incoming, record, RT.RNG.new(5))
     assert(glassRay ~= nil, "Dielectric should scatter")
     assertVectorNear(glassAttenuation, Vec3.new(1, 1, 1), 1e-8, "Dielectric attenuation")
@@ -364,6 +373,78 @@ local function testPathIntegrator()
     assert(color ~= nil, "Path integrator should return a color")
     assert(color.x == color.x and color.y == color.y and color.z == color.z, "Path color must not be NaN")
     assert(color.x >= 0 and color.y >= 0 and color.z >= 0, "Path color must be non-negative")
+end
+
+local function testDirectLightMaterialBoundary()
+    local function traceMaterial(material, onPrimaryHit)
+        local hitCalls = 0
+        local primaryRecord = {
+            point = Vec3.new(0, 0, 0),
+            normal = Vec3.new(0, 1, 0),
+            t = 1,
+            frontFace = true,
+            material = material,
+        }
+        local light = {
+            material = {
+                emitted = function()
+                    return Vec3.new(2, 2, 2)
+                end,
+            },
+            sampleSurface = function()
+                return Vec3.new(0, 1, 0), Vec3.new(0, -1, 0), 1
+            end,
+        }
+        local scene = {
+            lights = { light },
+            hit = function()
+                hitCalls = hitCalls + 1
+                if hitCalls == 1 then
+                    return primaryRecord
+                end
+                return nil
+            end,
+        }
+        local integrator = RT.PathIntegrator.new {
+            maxDepth = 1,
+            background = Vec3.new(0, 0, 0),
+            roulette = false,
+        }
+        local color = integrator:trace(
+            Ray.new(Vec3.new(0, 1, 0), Vec3.new(0, -1, 0)),
+            scene,
+            RT.RNG.new(42),
+            onPrimaryHit
+        )
+        return color, hitCalls
+    end
+
+    local diffuse = RT.Lambertian.new(Vec3.new(0.5, 0.5, 0.5))
+    assert(type(diffuse.directLightAlbedo) == "function", "Lambertian direct-light interface")
+    local diffuseColor, diffuseHitCalls = traceMaterial(diffuse)
+    assert(diffuseColor.x > 0 and diffuseColor.y > 0 and diffuseColor.z > 0,
+        "Lambertian should receive direct lighting")
+    assertNear(diffuseHitCalls, 2, 0, "Lambertian should cast one shadow ray")
+
+    local glass = RT.Dielectric.new(1.333)
+    assert(glass.albedoAt ~= nil, "Dielectric should retain AOV albedo")
+    assert(glass.directLightAlbedo == nil, "Dielectric must reject Lambertian direct lighting")
+    local glassColor, glassHitCalls = traceMaterial(glass)
+    assertVectorNear(glassColor, Vec3.new(0, 0, 0), 0,
+        "Dielectric must not receive Lambertian direct lighting")
+    assertNear(glassHitCalls, 1, 0, "Dielectric should not cast a diffuse shadow ray")
+
+    local withoutAOV = traceMaterial(diffuse)
+    local callbackRecord = nil
+    local withAOV = traceMaterial(diffuse, function(record)
+        callbackRecord = record
+        if record ~= nil and record.material ~= nil then
+            record.material:albedoAt(record)
+        end
+    end)
+    assert(callbackRecord ~= nil, "AOV callback should receive primary hit")
+    assertVectorNear(withAOV, withoutAOV, 0,
+        "AOV collection must not change Beauty radiance")
 end
 
 local function testAcceleration()
@@ -495,6 +576,7 @@ local function testLightingAndTextures()
 
     local light = RT.DiffuseLight.new(red, 3.0)
     local lightRecord = { point = Vec3.new(0, 0, 0), frontFace = true }
+    assert(light:denoiseClass(lightRecord) == "emission", "DiffuseLight denoise class")
     assertVectorNear(light:albedoAt(lightRecord), Vec3.new(0.8, 0.1, 0.05), 1e-8, "light AOV albedo")
     assertVectorNear(light:emitted(lightRecord), Vec3.new(2.4, 0.3, 0.15), 1e-8, "emitted color")
     lightRecord.frontFace = false
@@ -675,7 +757,26 @@ local function testPrimaryAOVAccumulation()
     assertNear(coverage, 2 / 3, 1e-8, "AOV hit coverage")
     assertNear(aov:getSampleCount(0, 0), 3, 0, "AOV sample count")
     assertNear(aov:getHitCount(0, 0), 2, 0, "AOV hit count")
+    assert(aov:getDenoiseClass(0, 0) == "unknown", "AOV default denoise class")
 
+    aov:set(1, 0, {
+        hit = true,
+        class = "diffuse",
+        albedo = Vec3.new(0.5, 0.5, 0.5),
+        normal = Vec3.new(0, 1, 0),
+        depth = 2,
+    })
+    assert(aov:getDenoiseClass(1, 0) == "diffuse", "AOV explicit denoise class")
+    aov:set(1, 0, {
+        hit = true,
+        class = "delta_transmission",
+        albedo = Vec3.new(1, 1, 1),
+        normal = Vec3.new(0, 1, 0),
+        depth = 2,
+    })
+    assert(aov:getDenoiseClass(1, 0) == "mixed", "AOV mixed denoise class")
+
+    aov:clear()
     local miss, _, _, missDepth, missCoverage = aov:get(1, 0)
     assert(not miss, "untouched AOV pixel should miss")
     assertNear(missDepth, 0, 0, "untouched AOV depth")
@@ -685,6 +786,81 @@ local function testPrimaryAOVAccumulation()
     assertNear(aov:getSampleCount(0, 0), 0, 0, "cleared AOV sample count")
     assertNear(aov:getHitCount(0, 0), 0, 0, "cleared AOV hit count")
     assertNear(aov:getCoverage(0, 0), 0, 0, "cleared AOV coverage")
+end
+
+local function testAOVClassFiltering()
+    local protectedClasses = {
+        "delta_reflection",
+        "delta_transmission",
+        "emission",
+        "mixed",
+        "unknown",
+    }
+    for classIndex = 1, #protectedClasses do
+        local protectedClass = protectedClasses[classIndex]
+        local film = RT.Film.new(3, 1)
+        film:addSample(0, 0, Vec3.new(0.1, 0.1, 0.1))
+        film:addSample(1, 0, Vec3.new(8.0, 6.0, 4.0))
+        film:addSample(2, 0, Vec3.new(0.1, 0.1, 0.1))
+
+        local aov = PrimaryAOV.new(3, 1)
+        local classes = { "diffuse", protectedClass, "diffuse" }
+        for x = 0, 2 do
+            aov:set(x, 0, {
+                hit = true,
+                class = classes[x + 1],
+                albedo = Vec3.new(1, 1, 1),
+                normal = Vec3.new(0, 1, 0),
+                depth = 1,
+            })
+        end
+
+        local filtered = AOVAtrous.filter(film, aov, 3)
+        local protectedR, protectedG, protectedB = filtered:get(1, 0)
+        assertNear(protectedR, 8.0, 0, protectedClass .. " red should pass through")
+        assertNear(protectedG, 6.0, 0, protectedClass .. " green should pass through")
+        assertNear(protectedB, 4.0, 0, protectedClass .. " blue should pass through")
+        local diffuseR, diffuseG, diffuseB = filtered:get(0, 0)
+        assertNear(diffuseR, 0.1, 1e-12, protectedClass .. " must not leak into diffuse red")
+        assertNear(diffuseG, 0.1, 1e-12, protectedClass .. " must not leak into diffuse green")
+        assertNear(diffuseB, 0.1, 1e-12, protectedClass .. " must not leak into diffuse blue")
+    end
+
+    local material = RT.Dielectric.new(1.33)
+    local camera = {
+        imageWidth = 1,
+        imageHeight = 1,
+        getRay = function()
+            return Ray.new(Vec3.new(0, 0, 0), Vec3.new(0, 0, -1))
+        end,
+    }
+    local integrator = {
+        resetStats = function()
+        end,
+        trace = function(_, _, _, _, onPrimaryHit)
+            onPrimaryHit({
+                point = Vec3.new(0, 0, -1),
+                normal = Vec3.new(0, 1, 0),
+                t = 1,
+                frontFace = true,
+                material = material,
+            })
+            return Vec3.new(0.25, 0.5, 0.75)
+        end,
+    }
+    local renderer = RT.Renderer.new {
+        camera = camera,
+        scene = {},
+        integrator = integrator,
+        width = 1,
+        height = 1,
+        samplesPerPixel = 1,
+    }
+    renderer:render()
+    assert(
+        renderer.aov:getDenoiseClass(0, 0) == "delta_transmission",
+        "Renderer should propagate primary material denoise class"
+    )
 end
 
 local function testOutput()
@@ -713,6 +889,7 @@ testRayAndSphere()
 testDeterministicRng()
 testMaterials()
 testPathIntegrator()
+testDirectLightMaterialBoundary()
 testAcceleration()
 testLightingAndTextures()
 testQuadAndRussianRoulette()
@@ -720,6 +897,7 @@ testCornellBoxSceneGeometry()
 testQualityPresets()
 testDisplayDenoise()
 testPrimaryAOVAccumulation()
+testAOVClassFiltering()
 testPhaseCRenderer()
 testPresenters()
 testOutput()
