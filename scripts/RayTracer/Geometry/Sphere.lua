@@ -57,6 +57,21 @@ function Sphere:sampleSurface(rng)
     return point, normal, 1 / (4 * math.pi * self.radius * self.radius)
 end
 
+function Sphere:pdfSurface(origin, point)
+    local toLight = point - origin
+    local distanceSquared = toLight:lengthSquared()
+    if distanceSquared <= 1e-12 then
+        return 0
+    end
+    local direction = toLight / math.sqrt(distanceSquared)
+    local outwardNormal = (point - self.center) / self.radius
+    local lightCosine = outwardNormal:dot(-direction)
+    if lightCosine <= 0 then
+        return 0
+    end
+    return distanceSquared / (lightCosine * 4 * math.pi * self.radius * self.radius)
+end
+
 function Sphere:boundingBox()
     local radius = self.radius
     local delta = Vec3.new(radius, radius, radius)

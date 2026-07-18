@@ -10,7 +10,45 @@ local RussianRoulette = require "RayTracer.Integrator.RussianRoulette"
 ---@class PathIntegrator
 ---@field background PathIntegratorVec3
 ---@field maxDepth number
-local function sampleDirectLight(scene, record, material, rng, stats)
+local function powerHeuristic(firstPdf, secondPdf)
+    local firstSquared = firstPdf * firstPdf
+    local secondSquared = secondPdf * secondPdf
+    local denominator = firstSquared + secondSquared
+    if denominator <= 1e-24 then
+        return 0
+    end
+    return firstSquared / denominator
+end
+
+local function lightIndexForObject(lights, object)
+    for index = 1, #lights do
+        if lights[index] == object then
+            return index
+        end
+    end
+    return nil
+end
+
+local function lightPdfForHit(scene, origin, record)
+    local lights = scene.lights
+    if lights == nil or #lights == 0
+            or origin == nil
+            or record == nil or record.object == nil
+            or type(record.object.pdfSurface) ~= "function" then
+        return 0
+    end
+    if lightIndexForObject(lights, record.object) == nil then
+        return 0
+    end
+    local surfacePdf = record.object:pdfSurface(origin, record.point)
+    if surfacePdf <= 0 then
+        return 0
+    end
+    return surfacePdf / #lights
+end
+
+local function sampleDirectLight(
+        scene, record, material, outgoingDirection, rng, stats, useMIS)
     local lights = scene.lights
     if lights == nil or #lights == 0
             or material == nil
@@ -53,6 +91,15 @@ local function sampleDirectLight(scene, record, material, rng, stats)
     local albedo = material:directLightAlbedo(record)
     local geometry = surfaceCosine * lightCosine / distanceSquared
     local weight = #lights * geometry / (math.pi * areaPdf)
+    if useMIS and type(material.pdf) == "function" then
+        local bsdfPdf = material:pdf(record, outgoingDirection, direction)
+        if type(bsdfPdf) == "number" and bsdfPdf > 0 then
+            local lightPdf = areaPdf * distanceSquared
+                / (lightCosine * #lights)
+            weight = weight * powerHeuristic(lightPdf, bsdfPdf)
+            stats.misLightSamples = stats.misLightSamples + 1
+        end
+    end
     return albedo * emitted * weight
 end
 
@@ -77,6 +124,9 @@ local function newStats()
         primaryTransmissionRouletteCount = 0,
         primaryTransmissionScatterStopCount = 0,
         primaryTransmissionDepthLimitCount = 0,
+        misLightSamples = 0,
+        misBsdfSamples = 0,
+        misEmissionSamples = 0,
     }
 end
 
@@ -92,6 +142,7 @@ function PathIntegrator.new(options)
         background = options.background,
         maxDepth = options.maxDepth or 8,
         roulette = roulette,
+        useMIS = options.useMIS == true,
         stats = newStats(),
     }, PathIntegrator)
 end
@@ -119,6 +170,9 @@ function PathIntegrator:getStats()
         primaryTransmissionRouletteCount = stats.primaryTransmissionRouletteCount,
         primaryTransmissionScatterStopCount = stats.primaryTransmissionScatterStopCount,
         primaryTransmissionDepthLimitCount = stats.primaryTransmissionDepthLimitCount,
+        misLightSamples = stats.misLightSamples,
+        misBsdfSamples = stats.misBsdfSamples,
+        misEmissionSamples = stats.misEmissionSamples,
         averagePathDepth = stats.pathCount > 0 and stats.bounceCount / stats.pathCount or 0,
     }
 end
@@ -164,6 +218,8 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
     local radianceG = 0.0
     local radianceB = 0.0
     local previousSpecular = true
+    local previousBsdfPdf = 0
+    local previousBsdfOrigin = nil
     local primaryTransmission = false
     local pendingTransmissionTarget = false
 
@@ -218,19 +274,53 @@ function PathIntegrator:trace(ray, scene, rng, onPrimaryHit)
         local emittedR = emitted.x
         local emittedG = emitted.y
         local emittedB = emitted.z
-        if previousSpecular then
+        if integrator.useMIS and record.material.isLight then
+            local lightPdf = lightPdfForHit(scene, previousBsdfOrigin, record)
+            local weight = previousBsdfPdf > 0 and lightPdf > 0
+                and powerHeuristic(previousBsdfPdf, lightPdf) or 1
+            if previousBsdfPdf > 0 then
+                stats.misEmissionSamples = stats.misEmissionSamples + 1
+            end
+            local contribution = emitted * weight
+            radianceR = radianceR + attenuationR * contribution.x
+            radianceG = radianceG + attenuationG * contribution.y
+            radianceB = radianceB + attenuationB * contribution.z
+        elseif previousSpecular then
             radianceR = radianceR + attenuationR * emittedR
             radianceG = radianceG + attenuationG * emittedG
             radianceB = radianceB + attenuationB * emittedB
         end
 
-        local direct = sampleDirectLight(scene, record, record.material, rng, stats)
+        local direct = sampleDirectLight(
+            scene,
+            record,
+            record.material,
+            -currentRay.direction:unit(),
+            rng,
+            stats,
+            integrator.useMIS
+        )
         radianceR = radianceR + attenuationR * direct.x
         radianceG = radianceG + attenuationG * direct.y
         radianceB = radianceB + attenuationB * direct.z
 
-        local scattered, albedo, isSpecular, scatterEvent =
-            record.material:scatter(currentRay, record, rng)
+        local scattered, albedo, isSpecular, scatterEvent
+        if integrator.useMIS and materialClass == "diffuse" then
+            local sampledRay, sampledAlbedo, sampledSpecular, sampledEvent, sampledPdf =
+                record.material:sample(currentRay, record, rng)
+            scattered = sampledRay
+            albedo = sampledAlbedo
+            isSpecular = sampledSpecular
+            scatterEvent = sampledEvent
+            previousBsdfPdf = sampledPdf or 0
+            previousBsdfOrigin = record.point
+            stats.misBsdfSamples = stats.misBsdfSamples + 1
+        else
+            scattered, albedo, isSpecular, scatterEvent =
+                record.material:scatter(currentRay, record, rng)
+            previousBsdfPdf = 0
+            previousBsdfOrigin = nil
+        end
         if depth == 1 and materialClass == "delta_transmission" then
             primaryTransmission = true
             pendingTransmissionTarget = true

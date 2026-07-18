@@ -45,6 +45,20 @@ function Triangle:sampleSurface(rng)
     return point, self.normal, 1 / self:area()
 end
 
+function Triangle:pdfSurface(origin, point)
+    local toLight = point - origin
+    local distanceSquared = toLight:lengthSquared()
+    if distanceSquared <= 1e-12 then
+        return 0
+    end
+    local direction = toLight / math.sqrt(distanceSquared)
+    local lightCosine = self.normal:dot(-direction)
+    if lightCosine <= 0 then
+        return 0
+    end
+    return distanceSquared / (lightCosine * self:area())
+end
+
 function Triangle:area()
     return 0.5 * self.edge1:cross(self.edge2):length()
 end

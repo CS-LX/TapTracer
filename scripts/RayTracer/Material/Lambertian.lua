@@ -12,6 +12,20 @@ local SolidColor = require "RayTracer.Texture.SolidColor"
 local Lambertian = {}
 Lambertian.__index = Lambertian
 
+local function cosineSampleDirection(normal, rng)
+    local radius = math.sqrt(rng:nextFloat())
+    local angle = 2 * math.pi * rng:nextFloat()
+    local tangentSeed = math.abs(normal.x) > 0.9
+        and Vec3.new(0, 1, 0)
+        or Vec3.new(1, 0, 0)
+    local tangent = tangentSeed:cross(normal):unit()
+    local bitangent = normal:cross(tangent)
+    local localZ = math.sqrt(math.max(0, 1 - radius * radius))
+    return tangent * (radius * math.cos(angle))
+        + bitangent * (radius * math.sin(angle))
+        + normal * localZ
+end
+
 function Lambertian.new(albedo)
     local texture = albedo
     if texture == nil or type(texture.value) ~= "function" then
@@ -41,10 +55,11 @@ function Lambertian:isDelta()
 end
 
 function Lambertian:sample(ray, record, rng)
-    local scattered, attenuation, isSpecular, event = self:scatter(ray, record, rng)
-    local samplePdf = scattered ~= nil
-        and self:pdf(record, -ray.direction, scattered.direction) or 0
-    return scattered, attenuation, isSpecular, event, samplePdf
+    local direction = cosineSampleDirection(record.normal, rng)
+    local scattered = Ray.new(record.point, direction)
+    local attenuation = self:albedoAt(record)
+    local samplePdf = self:pdf(record, -ray.direction, direction)
+    return scattered, attenuation, false, nil, samplePdf
 end
 
 function Lambertian:evaluate(record, outgoingDirection, incomingDirection)

@@ -38,7 +38,9 @@ tools/
 urhox-libs/
 AGENTS.md
 CLAUDE.md
+
+# Local references, captures, uploads, and credentials
 references/
 screenshots/
+_uploads/
 secret/
-

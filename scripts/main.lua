@@ -146,7 +146,8 @@ local function buildScene()
         SolidColor.new(Vec3.new(0.18, 0.67, 0.70)),
         SolidColor.new(Vec3.new(0.32, 0.82, 0.78))
     ))
-    local water = RayTracer.Dielectric.new(1.333)
+    local glass = RayTracer.Dielectric.new(1.5)
+    local metal = RayTracer.Metal.new(Vec3.new(0.92, 0.95, 0.98), 0.08)
     local coral = RayTracer.Lambertian.new(Vec3.new(0.95, 0.22, 0.28))
     local sunshine = RayTracer.Lambertian.new(Vec3.new(0.98, 0.72, 0.12))
     local skyBlue = RayTracer.Lambertian.new(Vec3.new(0.12, 0.46, 0.92))
@@ -170,12 +171,6 @@ local function buildScene()
         Vec3.new(11, 0, 0),
         Vec3.new(0, 0, 20),
         poolTile
-    ))
-    scene_:add(RayTracer.Quad.new(
-        Vec3.new(-5.5, 0.02, -2),
-        Vec3.new(0, 0, 20),
-        Vec3.new(11, 0, 0),
-        water
     ))
 
     -- 两侧白色瓷砖墙保持低矮，让天空占据画面上半部。
@@ -205,6 +200,15 @@ local function buildScene()
     scene_:add(RayTracer.Sphere.new(Vec3.new(2.4, 0.65, 5.6), 0.65, sunshine))
     scene_:add(RayTracer.Sphere.new(Vec3.new(-1.0, 1.05, 9.0), 1.05, skyBlue))
     scene_:add(RayTracer.Sphere.new(Vec3.new(4.2, 0.55, 12.2), 0.55, lavender))
+
+    -- 视野近处的玻璃块与金属球，用于观察折射、反射和材质边界。
+    addBox(
+        scene_,
+        Vec3.new(-3.5, 0.0, -0.2),
+        Vec3.new(-0.2, 3.1, 3.1),
+        glass
+    )
+    scene_:add(RayTracer.Sphere.new(Vec3.new(2.0, 1.35, 1.2), 1.35, metal))
 
     local bvh = scene_:buildBVH()
     local bvhStats = bvh:getStats()
@@ -245,6 +249,7 @@ local function buildRenderer(config)
         integrator = RayTracer.PathIntegrator.new {
             maxDepth = config.maxDepth,
             background = RayTracer.Vec3.new(0.16, 0.42, 0.92),
+            useMIS = true,
         },
     }
     return renderer_

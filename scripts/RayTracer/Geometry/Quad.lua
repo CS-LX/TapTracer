@@ -48,6 +48,20 @@ function Quad:sampleSurface(rng)
         1 / self.area
 end
 
+function Quad:pdfSurface(origin, point)
+    local toLight = point - origin
+    local distanceSquared = toLight:lengthSquared()
+    if distanceSquared <= 1e-12 then
+        return 0
+    end
+    local direction = toLight / math.sqrt(distanceSquared)
+    local lightCosine = self.normal:dot(-direction)
+    if lightCosine <= 0 then
+        return 0
+    end
+    return distanceSquared / (lightCosine * self.area)
+end
+
 function Quad:hit(ray, rayInterval)
     local denominator = self.normal:dot(ray.direction)
     if math.abs(denominator) < 1e-10 then
