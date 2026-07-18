@@ -503,15 +503,6 @@ Clamp / Image / Texture2D
 
 目标：先确认水面噪声的路径构成和终止去向，再决定是否值得实现 transmission 专项显示候选；在收益未知前不拆完整 lobe Film。
 
-黑盒日志路径约束：
-
-- TapTap Preview 的 Web 运行日志必须优先从 `/opt/log/dev/Web(Win32)_p_6lvc_1.0.0_user_script.log` 读取；
-- 同一日志的索引记录位于 `/opt/log/runtime_index/current.jsonl`，可按 `filename`、`topic=user_script` 和 `projectId=p_6lvc` 定位；
-- `/opt/log/dev/user_script.log` 是同一 user script 日志的简短入口；
-- `/home/Maker/logs/lua/` 仅作为本地 UrhoXRuntime/validate 运行记录，不是 TapTap Preview 完整渲染统计的首选来源；
-- 完整渲染完成后，应在上述 Web 日志中查找 `[RayTracer][H5]` 两行以及紧邻的 `[RayTracer] render complete`，不要仅依据 `[RayTracer] started` 判断渲染完成；
-- 本约束适用于后续所有 H5 黑盒验收，除非 Preview 平台、项目 ID 或日志文件名发生变化。
-
 已实现的最小诊断：
 
 - `Dielectric:scatter()` 增加第四个只读返回值，标记本次 Fresnel 选择为 `reflection` 或 `transmission`；原有方向、衰减、specular 标记和随机数调用顺序不变，旧的三返回值调用继续兼容；
