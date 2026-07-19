@@ -5,15 +5,19 @@ local PrimaryAOV = require "RayTracer.Display.PrimaryAOV"
 local AOVAtrous = require "RayTracer.Display.AOVAtrous"
 local RenderController = require "RayTracer.Runtime.RenderController"
 local InspectorUI = require "RayTracer.UI.InspectorUI"
-local SceneCatalog = require "RayTracer.Scenes.SceneCatalog"
-local MaterialShowcase = SceneCatalog.active
 local UI = require("urhox-libs/UI")
+
+local RenderMode = {}
+
+---@type table|nil
+local sceneProvider_ = nil
+local onBack_ = nil
 
 local ACTIVE_QUALITY = "preview"
 local ACTIVE_PRESET = QualityPresets.get(ACTIVE_QUALITY)
 
 local CONFIG = {
-    title = MaterialShowcase.title,
+    title = "CPU Ray Tracer",
 }
 for key, value in pairs(ACTIVE_PRESET) do
     CONFIG[key] = value
@@ -75,11 +79,11 @@ local pendingDisplayUpload_ = false
 local reportedComplete_ = false
 
 local function buildCamera(config)
-    camera_ = MaterialShowcase.buildCamera(config)
+    camera_ = sceneProvider_.buildCamera(config)
 end
 
 local function buildScene()
-    scene_ = MaterialShowcase.build()
+    scene_ = sceneProvider_.build()
     local bvh = scene_:buildBVH()
     local bvhStats = bvh:getStats()
     print(string.format(
@@ -108,7 +112,7 @@ local function buildRenderer(config)
         end,
         integrator = RayTracer.PathIntegrator.new {
             maxDepth = config.maxDepth,
-            background = MaterialShowcase.background,
+            background = sceneProvider_.background,
             useMIS = config.useMIS == true,
         },
     }
@@ -408,7 +412,7 @@ local function buildUI()
 
     statusLabel_ = UI.Label {
         id = "render-status",
-        text = "初始化中 · " .. MaterialShowcase.statusName,
+        text = "初始化中 · " .. sceneProvider_.statusName,
         fontSize = 11,
         fontColor = { 168, 190, 212, 255 },
         flexGrow = 1,
@@ -434,10 +438,23 @@ local function buildUI()
         flexDirection = "row",
         alignItems = "center",
         paddingHorizontal = 18,
+        gap = 12,
         backgroundColor = { 12, 22, 34, 255 },
         borderBottomWidth = 1,
         borderBottomColor = { 60, 79, 98, 160 },
         children = {
+            UI.Button {
+                text = "返回编辑",
+                variant = "secondary",
+                width = 92,
+                height = 30,
+                fontSize = 10,
+                onClick = function()
+                    if onBack_ ~= nil then
+                        onBack_()
+                    end
+                end,
+            },
             titleLabel_,
             UI.Label {
                 text = "CPU PATH TRACING",
@@ -784,15 +801,14 @@ local function printRenderStats(renderer)
     end
 end
 
-function Start()
+function RenderMode.start(options)
+    assert(options ~= nil and options.sceneProvider ~= nil,
+        "RenderMode requires sceneProvider")
+    sceneProvider_ = options.sceneProvider
+    onBack_ = options.onBack
+    CONFIG.title = sceneProvider_.title or "CPU Ray Tracer"
     graphics.windowTitle = CONFIG.title
     input.mouseMode = MM_ABSOLUTE
-
-    vg_ = nvgCreate(1)
-    if vg_ == nil then
-        print("[RayTracer] ERROR: NanoVG context creation failed")
-        return
-    end
 
     applyPreset(ACTIVE_QUALITY)
     buildUI()
@@ -870,11 +886,11 @@ function Start()
     workspacePanel_:AddChild(inspectorPanel_)
     UI.MarkLayoutDirty()
     layoutDisplayCanvas()
-    SubscribeToEvent("Update", "HandleUpdate")
-    SubscribeToEvent(vg_, "NanoVGRender", "HandleRender")
-    SubscribeToEvent("ScreenMode", "HandleScreenMode")
+    renderController_:start()
+    renderer_ = renderController_:getRenderer()
+    statusLabel_:SetText("已开始绘制")
     print(string.format(
-        "[RayTracer] started: preset=%s resolution=%dx%d spp=%d",
+        "[RayTracer] started on demand: preset=%s resolution=%dx%d spp=%d",
         CONFIG.quality,
         CONFIG.width,
         CONFIG.height,
@@ -882,9 +898,8 @@ function Start()
     ))
 end
 
----@param eventType string
----@param eventData UpdateEventData
-function HandleUpdate(eventType, eventData)
+---@param timeStep number
+function RenderMode.update(timeStep)
     local controller = renderController_
     local statusLabel = statusLabel_
     local progressBar = progressBar_
@@ -925,7 +940,7 @@ function HandleUpdate(eventType, eventData)
         if pendingDisplayUpload_ then
             uploadDisplayTexture()
         end
-        statusLabel:SetText("渲染完成 · " .. MaterialShowcase.statusName)
+        statusLabel:SetText("渲染完成 · " .. sceneProvider_.statusName)
         progressBar:SetValue(1)
         reportedComplete_ = true
         printRenderStats(renderer_)
@@ -933,50 +948,46 @@ function HandleUpdate(eventType, eventData)
     end
 end
 
----@param eventType string
----@param eventData ScreenModeEventData
-function HandleScreenMode(eventType, eventData)
+function RenderMode.screenMode()
     UI.MarkLayoutDirty()
     layoutDisplayCanvas()
 end
 
----@param eventType string
----@param eventData NanoVGRenderEventData
-function HandleRender(eventType, eventData)
-    local vg = vg_
-    if vg == nil then
-        return
+function RenderMode.stop()
+    if renderController_ ~= nil then
+        renderController_:stop()
+        renderController_ = nil
     end
-
-    local physicalW = graphics:GetWidth()
-    local physicalH = graphics:GetHeight()
-    local dpr = graphics:GetDPR()
-    if dpr <= 0 then
-        dpr = 1
+    if displayCanvas_ ~= nil then
+        displayCanvas_:Remove()
+        displayCanvas_:Dispose()
+        displayCanvas_ = nil
     end
-    local logicalW = physicalW / dpr
-    local logicalH = physicalH / dpr
-
-    nvgBeginFrame(vg, logicalW, logicalH, dpr)
-
-    nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, logicalW, logicalH)
-    nvgFillColor(vg, nvgRGBA(8, 12, 20, 255))
-    nvgFill(vg)
-
-    nvgEndFrame(vg)
+    if displayTexture_ ~= nil then
+        displayTexture_:Dispose()
+        displayTexture_ = nil
+    end
+    if displayImage_ ~= nil then
+        displayImage_:Dispose()
+        displayImage_ = nil
+    end
+    camera_ = nil
+    scene_ = nil
+    renderer_ = nil
+    displayFrame_ = nil
+    uiRoot_ = nil
+    statusLabel_ = nil
+    progressBar_ = nil
+    renderViewport_ = nil
+    workspacePanel_ = nil
+    inspectorPanel_ = nil
+    titleLabel_ = nil
+    sceneProvider_ = nil
+    onBack_ = nil
 end
 
-function Stop()
-    if UI.GetRoot() ~= nil then
-        UI.Shutdown()
-        uiRoot_ = nil
-        statusLabel_ = nil
-        progressBar_ = nil
-    end
-    if vg_ ~= nil then
-        nvgDelete(vg_)
-        vg_ = nil
-        print("[RayTracer] NanoVG context deleted")
-    end
+function RenderMode.isRunning()
+    return renderController_ ~= nil and renderController_:isRunning()
 end
+
+return RenderMode

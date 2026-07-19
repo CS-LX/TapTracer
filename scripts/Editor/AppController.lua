@@ -4,6 +4,8 @@ local RealtimeSceneAdapter = require "Editor.RealtimeSceneAdapter"
 local EditorCameraController = require "Editor.EditorCameraController"
 local GizmoController = require "Editor.GizmoController"
 local EditorWorkspace = require "Editor.UI.EditorWorkspace"
+local JsonSceneLoader = require "SceneFormat.JsonSceneLoader"
+local RenderMode = require "render_legacy"
 
 local EditorApp = {}
 EditorApp.__index = EditorApp
@@ -22,13 +24,63 @@ function EditorApp.new()
         viewportRect = { left = 0, top = 0, width = 1, height = 1 },
         viewportHovered = false,
         selectedId = nil,
+        mode = "editor",
     }, EditorApp)
 end
 
 function EditorApp:start()
     graphics.windowTitle = "CPU Ray Tracer · Scene Editor"
     input.mouseMode = MM_ABSOLUTE
+    self.document = SceneDocument.load(
+        "Scenes/MaterialShowcase.json",
+        "scene-editor/MaterialShowcase.json"
+    )
+    self:startEditorWorkspace()
+end
 
+function EditorApp:buildEditorPreview()
+    self.adapter = RealtimeSceneAdapter.new(self.document)
+    self.adapter:build()
+    self.cameraController = EditorCameraController.new(
+        self.adapter:getCameraNode()
+    )
+    self.gizmo = GizmoController.new(self.document, self.adapter)
+end
+
+function EditorApp:enterRenderMode()
+    if self.mode == "render" then
+        return
+    end
+    local provider = JsonSceneLoader.compileDocument(
+        self.document:snapshot(),
+        "SceneEditorMemory"
+    )
+    self.mode = "render"
+    self.adapter:dispose()
+    self.adapter = nil
+    self.cameraController = nil
+    self.gizmo = nil
+    self.workspace = nil
+    UI.Shutdown()
+    RenderMode.start {
+        sceneProvider = provider,
+        onBack = function()
+            self:returnToEditor()
+        end,
+    }
+end
+
+function EditorApp:returnToEditor()
+    if self.mode ~= "render" then
+        return
+    end
+    RenderMode.stop()
+    UI.Shutdown()
+    self.mode = "editor"
+    self:startEditorWorkspace()
+end
+
+function EditorApp:startEditorWorkspace()
     UI.Init {
         theme = "default-taptap",
         fonts = {
@@ -42,17 +94,7 @@ function EditorApp:start()
         },
         scale = UI.Scale.DEFAULT,
     }
-
-    self.document = SceneDocument.load(
-        "Scenes/MaterialShowcase.json",
-        "scene-editor/MaterialShowcase.json"
-    )
-    self.adapter = RealtimeSceneAdapter.new(self.document)
-    self.adapter:build()
-    self.cameraController = EditorCameraController.new(
-        self.adapter:getCameraNode()
-    )
-    self.gizmo = GizmoController.new(self.document, self.adapter)
+    self:buildEditorPreview()
 
     self.workspace = EditorWorkspace.build(UI, {
         document = self.document,
@@ -112,7 +154,7 @@ function EditorApp:start()
             self.gizmo:setSelected(nil)
         end,
         onRenderRequested = function()
-            print("[Editor] render requested; deferred to step 2")
+            self:enterRenderMode()
         end,
     })
     UI.SetRoot(self.workspace.root)
@@ -127,7 +169,9 @@ function EditorApp:start()
 end
 
 function EditorApp:stop()
-    if self.adapter ~= nil then
+    if self.mode == "render" then
+        RenderMode.stop()
+    elseif self.adapter ~= nil then
         self.adapter:dispose()
         self.adapter = nil
     end
@@ -137,7 +181,11 @@ function EditorApp:stop()
 end
 
 function EditorApp:updateViewportRect()
-    if self.workspace == nil then
+    if self.mode == "render" then
+        RenderMode.screenMode()
+        return
+    end
+    if self.workspace == nil or self.adapter == nil then
         return
     end
     UI.Layout()
@@ -203,6 +251,10 @@ function EditorApp:handlePointer()
 end
 
 function EditorApp:update(timeStep)
+    if self.mode == "render" then
+        RenderMode.update(timeStep)
+        return
+    end
     self:updateViewportRect()
     self:handlePointer()
     self.cameraController:update(timeStep, self.viewportHovered, false)
@@ -216,7 +268,9 @@ function EditorApp:update(timeStep)
 end
 
 function EditorApp:postRenderUpdate()
-    self.adapter:drawDebug(self.gizmo.tool)
+    if self.mode == "editor" and self.adapter ~= nil then
+        self.adapter:drawDebug(self.gizmo.tool)
+    end
 end
 
 return EditorApp
