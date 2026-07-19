@@ -1,31 +1,43 @@
 local SceneCatalog = require "RayTracer.Scenes.SceneCatalog"
 
+local function assertScene(provider, objectCount, lightCount, label)
+    local scene = provider.build()
+    assert(#scene.objects == objectCount, label .. " object count")
+    assert(#scene.lights == lightCount, label .. " light count")
+    scene:buildBVH()
+    assert(scene:getAccelerator() ~= nil, label .. " BVH")
+
+    local config = { width = 256, height = 144 }
+    assert(provider.buildCamera(config) ~= nil, label .. " camera")
+    return scene
+end
+
 local function runChecks()
     local active = SceneCatalog.active
+    local jsonShowcase = SceneCatalog.json.MaterialShowcase
+    local luaShowcase = SceneCatalog.lua.MaterialShowcase
     local archived = SceneCatalog.archived.PoolcoreCourtyard
 
     assert(active ~= nil, "active scene must exist")
+    assert(active == jsonShowcase, "JSON MaterialShowcase must remain active")
+    assert(active.sourceType == "json", "active scene source type")
+    assert(active.sourcePath == "Scenes/MaterialShowcase.json",
+        "active scene source path")
     assert(active.statusName == "Open Material Field",
         "MaterialShowcase must remain active")
+    assert(luaShowcase ~= nil, "Lua MaterialShowcase must remain available")
     assert(archived ~= nil, "PoolcoreCourtyard archive must exist")
     assert(archived.statusName == "Poolcore Courtyard",
         "PoolcoreCourtyard archive identity")
 
-    local activeScene = active.build()
-    local archivedScene = archived.build()
-    assert(#activeScene.objects == 52, "MaterialShowcase object count")
-    assert(#activeScene.lights == 2, "MaterialShowcase light count")
-    assert(#archivedScene.objects == 86, "PoolcoreCourtyard object count")
-    assert(#archivedScene.lights == 1, "PoolcoreCourtyard light count")
+    local jsonScene = assertScene(jsonShowcase, 52, 2, "JSON MaterialShowcase")
+    local luaScene = assertScene(luaShowcase, 52, 2, "Lua MaterialShowcase")
+    assertScene(archived, 86, 1, "Lua PoolcoreCourtyard")
 
-    activeScene:buildBVH()
-    archivedScene:buildBVH()
-    assert(activeScene:getAccelerator() ~= nil, "MaterialShowcase BVH")
-    assert(archivedScene:getAccelerator() ~= nil, "PoolcoreCourtyard BVH")
-
-    local config = { width = 256, height = 144 }
-    assert(active.buildCamera(config) ~= nil, "MaterialShowcase camera")
-    assert(archived.buildCamera(config) ~= nil, "PoolcoreCourtyard camera")
+    assert(#jsonScene.objects == #luaScene.objects,
+        "JSON and Lua MaterialShowcase object parity")
+    assert(#jsonScene.lights == #luaScene.lights,
+        "JSON and Lua MaterialShowcase light parity")
 end
 
 function Start()

@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "metadata": {
+    "title": "CPU Ray Tracer · Open Material Field",
+    "statusName": "Open Material Field"
+  },
+  "background": [0.29, 0.56, 0.85],
+  "camera": {
+    "verticalFov": 47,
+    "lookFrom": [0, 5.2, -15.0],
+    "lookAt": [0, 1.5, 10.0],
+    "up": [0, 1, 0],
+    "defocusAngle": 0
+  },
+  "textures": {
+    "groundChecker": {
+      "type": "checker",
+      "scale": 3.0,
+      "even": [0.48, 0.55, 0.46],
+      "odd": [0.72, 0.70, 0.60]
+    }
+  },
+  "materials": {
+    "ground": {
+      "type": "lambertian",
+      "texture": "groundChecker"
+    },
+    "pedestal": {
+      "type": "lambertian",
+      "color": [0.72, 0.74, 0.70]
+    },
+    "white": {
+      "type": "lambertian",
+      "color": [0.88, 0.90, 0.86]
+    },
+    "coral": {
+      "type": "lambertian",
+      "color": [0.88, 0.12, 0.08]
+    },
+    "cobalt": {
+      "type": "lambertian",
+      "color": [0.08, 0.24, 0.88]
+    },
+    "violet": {
+      "type": "lambertian",
+      "color": [0.55, 0.12, 0.78]
+    },
+    "amber": {
+      "type": "lambertian",
+      "color": [0.96, 0.54, 0.06]
+    },
+    "turquoise": {
+      "type": "lambertian",
+      "color": [0.04, 0.68, 0.60]
+    },
+    "glass": {
+      "type": "dielectric",
+      "ior": 1.5
+    },
+    "goldMetal": {
+      "type": "metal",
+      "color": [0.95, 0.64, 0.22],
+      "fuzz": 0.12
+    },
+    "copperMetal": {
+      "type": "metal",
+      "color": [0.90, 0.34, 0.16],
+      "fuzz": 0.24
+    },
+    "blueMetal": {
+      "type": "metal",
+      "color": [0.18, 0.42, 0.92],
+      "fuzz": 0.08
+    },
+    "daylight": {
+      "type": "diffuseLight",
+      "color": [1.0, 0.98, 0.92],
+      "intensity": 7.0
+    },
+    "sun": {
+      "type": "diffuseLight",
+      "color": [1.0, 0.88, 0.62],
+      "intensity": 5.0
+    }
+  },
+  "objects": [
+    {
+      "type": "quad",
+      "origin": [-60, -0.05, -20],
+      "edgeU": [0, 0, 110],
+      "edgeV": [120, 0, 0],
+      "material": "ground"
+    },
+    {
+      "type": "box",
+      "minimum": [-6.9, 0, 2.1],
+      "maximum": [-2.7, 0.35, 6.3],
+      "material": "pedestal"
+    },
+    {
+      "type": "sphere",
+      "center": [-4.8, 2.05, 4.2],
+      "radius": 1.8,
+      "material": "glass"
+    },
+    {
+      "type": "box",
+      "minimum": [-2.0, 0, 3.3],
+      "maximum": [2.0, 0.35, 7.3],
+      "material": "pedestal"
+    },
+    {
+      "type": "sphere",
+      "center": [0, 1.95, 5.3],
+      "radius": 1.6,
+      "material": "goldMetal"
+    },
+    {
+      "type": "box",
+      "minimum": [2.6, 0, 2.2],
+      "maximum": [6.8, 0.35, 6.4],
+      "material": "pedestal"
+    },
+    {
+      "type": "sphere",
+      "center": [4.7, 2.0, 4.3],
+      "radius": 1.65,
+      "material": "coral"
+    },
+    {
+      "type": "box",
+      "minimum": [-7.8, 0, 11.2],
+      "maximum": [-5.2, 3.2, 14.0],
+      "material": "cobalt"
+    },
+    {
+      "type": "sphere",
+      "center": [-2.8, 1.35, 12.6],
+      "radius": 1.35,
+      "material": "copperMetal"
+    },
+    {
+      "type": "box",
+      "minimum": [0.1, 0, 11.1],
+      "maximum": [3.2, 3.7, 14.2],
+      "material": "glass"
+    },
+    {
+      "type": "sphere",
+      "center": [6.0, 1.45, 12.8],
+      "radius": 1.45,
+      "material": "violet"
+    },
+    {
+      "type": "box",
+      "minimum": [-10.5, 0, 20.0],
+      "maximum": [-8.0, 5.5, 22.5],
+      "material": "amber"
+    },
+    {
+      "type": "sphere",
+      "center": [-4.8, 1.2, 21.2],
+      "radius": 1.2,
+      "material": "blueMetal"
+    },
+    {
+      "type": "box",
+      "minimum": [1.7, 0, 19.7],
+      "maximum": [4.5, 4.2, 22.5],
+      "material": "turquoise"
+    },
+    {
+      "type": "sphere",
+      "center": [9.0, 1.45, 21.5],
+      "radius": 1.45,
+      "material": "white"
+    },
+    {
+      "type": "quad",
+      "origin": [-8.0, 12.0, -5.0],
+      "edgeU": [16.0, 0, 0],
+      "edgeV": [0, 0, 12.0],
+      "material": "daylight"
+    },
+    {
+      "type": "sphere",
+      "center": [15.0, 15.0, 18.0],
+      "radius": 2.2,
+      "material": "sun"
+    }
+  ]
+}
