@@ -14,19 +14,10 @@ local ACTIVE_PRESET = QualityPresets.get(ACTIVE_QUALITY)
 
 local CONFIG = {
     title = MaterialShowcase.title,
-    quality = ACTIVE_QUALITY,
-    width = ACTIVE_PRESET.width,
-    height = ACTIVE_PRESET.height,
-    samplesPerPixel = ACTIVE_PRESET.samplesPerPixel,
-    progressiveChunkWidth = ACTIVE_PRESET.progressiveChunkWidth,
-    progressiveChunkHeight = ACTIVE_PRESET.progressiveChunkHeight,
-    maxTilesPerStep = ACTIVE_PRESET.maxTilesPerStep,
-    maxDepth = ACTIVE_PRESET.maxDepth or 8,
-    denoise = true,
-    transmissionDenoise = true,
-    denoiseIterations = 3,
-    denoiseKernel = "3x3",
 }
+for key, value in pairs(ACTIVE_PRESET) do
+    CONFIG[key] = value
+end
 
 local function copyConfig(config)
     local result = {}
@@ -61,6 +52,14 @@ local displayImage_ = nil
 local displayTexture_ = nil
 ---@type BorderImage|nil
 local displayCanvas_ = nil
+---@type Panel|nil
+local renderViewport_ = nil
+---@type Panel|nil
+local workspacePanel_ = nil
+---@type Panel|nil
+local inspectorPanel_ = nil
+---@type Label|nil
+local titleLabel_ = nil
 local displayedPixels_ = 0
 local displayUploadSeconds_ = 0
 local displayUploadCount_ = 0
@@ -74,10 +73,6 @@ local lastAOVFilterSeconds_ = 0
 local lastAOVFilterStats_ = nil
 local pendingDisplayUpload_ = false
 local reportedComplete_ = false
-local INSPECTOR_RESERVED_WIDTH = 278
-local DISPLAY_MARGIN = 24
-local J6_SEED = 42
-local J6_EXPOSURE = 1.0
 
 local function buildCamera(config)
     camera_ = MaterialShowcase.buildCamera(config)
@@ -107,14 +102,14 @@ local function buildRenderer(config)
         tileSize = 8,
         tileWidth = config.progressiveChunkWidth,
         tileHeight = config.progressiveChunkHeight,
-        seed = J6_SEED,
+        seed = config.seed,
         timeProvider = function()
             return GetTime():GetElapsedTime()
         end,
         integrator = RayTracer.PathIntegrator.new {
             maxDepth = config.maxDepth,
             background = MaterialShowcase.background,
-            useMIS = true,
+            useMIS = config.useMIS == true,
         },
     }
     return renderer_
@@ -140,20 +135,19 @@ local function setConfig(config)
     CONFIG.progressiveChunkHeight = renderConfig_.progressiveChunkHeight
     CONFIG.maxTilesPerStep = renderConfig_.maxTilesPerStep
     CONFIG.maxDepth = renderConfig_.maxDepth
-    CONFIG.denoise = renderConfig_.denoise
-    CONFIG.transmissionDenoise = renderConfig_.transmissionDenoise ~= false
-    CONFIG.denoiseIterations = renderConfig_.denoiseIterations or 3
-    CONFIG.denoiseKernel = renderConfig_.denoiseKernel or "3x3"
+    CONFIG.seed = renderConfig_.seed
+    CONFIG.exposure = renderConfig_.exposure
+    CONFIG.useMIS = renderConfig_.useMIS == true
+    CONFIG.denoise = renderConfig_.denoise == true
+    CONFIG.transmissionDenoise = renderConfig_.transmissionDenoise == true
+    CONFIG.denoiseIterations = renderConfig_.denoiseIterations
+    CONFIG.denoiseKernel = renderConfig_.denoiseKernel
 end
 
 local function applyPreset(name)
     local preset = QualityPresets.get(name)
-    local config = copyConfig(CONFIG)
-    for key, value in pairs(preset) do
-        config[key] = value
-    end
-    config.quality = name
-    setConfig(config)
+    preset.title = CONFIG.title
+    setConfig(preset)
 end
 
 local function updateDisplayFromFrame(frame, iterations)
@@ -219,9 +213,9 @@ local function updateDisplayFromFrame(frame, iterations)
         for column = 0, width - 1 do
             local r, g, b = displayFrame:get(column, row)
             displayImage_:SetPixel(column, row, Color(
-                encodeDisplayChannel(r),
-                encodeDisplayChannel(g),
-                encodeDisplayChannel(b),
+                encodeDisplayChannel(r * CONFIG.exposure),
+                encodeDisplayChannel(g * CONFIG.exposure),
+                encodeDisplayChannel(b * CONFIG.exposure),
                 1.0
             ))
         end
@@ -333,9 +327,9 @@ local function updateDisplayTile(tile)
         for column = startX, endX do
             local r, g, b = displayFrame:get(column, row)
             image:SetPixel(column, row, Color(
-                encodeDisplayChannel(r),
-                encodeDisplayChannel(g),
-                encodeDisplayChannel(b),
+                encodeDisplayChannel(r * CONFIG.exposure),
+                encodeDisplayChannel(g * CONFIG.exposure),
+                encodeDisplayChannel(b * CONFIG.exposure),
                 1.0
             ))
             filteredPixels = filteredPixels + 1
@@ -352,117 +346,166 @@ end
 
 local function layoutDisplayCanvas()
     local canvas = displayCanvas_
-    if canvas == nil then
+    local viewport = renderViewport_
+    if canvas == nil or viewport == nil then
         return
     end
 
-    local physicalW = graphics:GetWidth()
-    local physicalH = graphics:GetHeight()
-    local dpr = math.max(1, graphics:GetDPR())
-    local logicalW = physicalW / dpr
-    local logicalH = physicalH / dpr
-    local availableWidth = math.max(160, logicalW - INSPECTOR_RESERVED_WIDTH - DISPLAY_MARGIN * 2)
-    local availableHeight = math.max(90, logicalH - 150)
-    local imageWidth = math.min(availableWidth, availableHeight * CONFIG.width / CONFIG.height)
-    local imageHeight = imageWidth * CONFIG.height / CONFIG.width
-    local imageLeft = DISPLAY_MARGIN + (availableWidth - imageWidth) * 0.5
-    local imageTop = math.max(56, (logicalH - imageHeight) * 0.5)
+    UI.Layout()
+    local bounds = viewport:GetAbsoluteLayout()
+    local scale = UI.GetScale()
+    local padding = 14
+    local availableWidth = math.max(1, bounds.w - padding * 2)
+    local availableHeight = math.max(1, bounds.h - padding * 2)
+    local imageAspect = CONFIG.width / CONFIG.height
+    local viewportAspect = availableWidth / availableHeight
+    local imageWidth, imageHeight
+    if imageAspect > viewportAspect then
+        imageWidth = availableWidth
+        imageHeight = imageWidth / imageAspect
+    else
+        imageHeight = availableHeight
+        imageWidth = imageHeight * imageAspect
+    end
+    local imageLeft = bounds.x + padding + (availableWidth - imageWidth) * 0.5
+    local imageTop = bounds.y + padding + (availableHeight - imageHeight) * 0.5
 
     canvas:SetPosition(
-        math.floor(imageLeft * dpr),
-        math.floor(imageTop * dpr)
+        math.floor(imageLeft * scale + 0.5),
+        math.floor(imageTop * scale + 0.5)
     )
     canvas:SetSize(
-        math.floor(imageWidth * dpr),
-        math.floor(imageHeight * dpr)
+        math.max(1, math.floor(imageWidth * scale + 0.5)),
+        math.max(1, math.floor(imageHeight * scale + 0.5))
     )
 end
 
 local function buildUI()
     UI.Init {
-        theme = "default-dark",
+        theme = "default-taptap",
         fonts = {
-            { name = "sans", path = "Fonts/NotoSansSC-Black.ttf" },
+            {
+                family = "sans",
+                weights = {
+                    normal = "Fonts/NotoSansSC-Black.ttf",
+                    bold = "Fonts/NotoSansSC-Black.ttf",
+                },
+            },
         },
         scale = UI.Scale.DEFAULT,
     }
 
+    titleLabel_ = UI.Label {
+        id = "title",
+        text = string.format("%s  /  %s", CONFIG.title, CONFIG.quality),
+        fontSize = 15,
+        fontWeight = "bold",
+        fontColor = { 235, 244, 255, 255 },
+        flexGrow = 1,
+        flexShrink = 1,
+        verticalAlign = "middle",
+    }
+
     statusLabel_ = UI.Label {
         id = "render-status",
-        position = "absolute",
-        left = 0,
-        width = "100%",
-        bottom = 54,
-        height = 36,
         text = "初始化中 · " .. MaterialShowcase.statusName,
-        fontSize = 14,
-        fontColor = { 206, 224, 244, 255 },
-        textAlign = "center",
+        fontSize = 11,
+        fontColor = { 168, 190, 212, 255 },
+        flexGrow = 1,
+        flexShrink = 1,
         verticalAlign = "middle",
-        textStroke = { width = 2, color = { 8, 12, 20, 255 } },
     }
 
     progressBar_ = UI.ProgressBar {
         id = "render-progress",
-        position = "absolute",
-        left = 24,
-        width = "94%",
-        bottom = 34,
-        height = 10,
+        width = "100%",
+        height = 5,
         value = 0,
         max = 1,
-        fillGradient = {
-            direction = "to-right",
-            from = { 80, 190, 255, 255 },
-            to = { 90, 230, 160, 255 },
+        backgroundColor = { 34, 48, 64, 255 },
+        fillColor = { 45, 212, 191, 255 },
+        borderRadius = 0,
+        transition = "value 0.15s easeOut",
+    }
+
+    local header = UI.Panel {
+        height = 48,
+        flexShrink = 0,
+        flexDirection = "row",
+        alignItems = "center",
+        paddingHorizontal = 18,
+        backgroundColor = { 12, 22, 34, 255 },
+        borderBottomWidth = 1,
+        borderBottomColor = { 60, 79, 98, 160 },
+        children = {
+            titleLabel_,
+            UI.Label {
+                text = "CPU PATH TRACING",
+                fontSize = 9,
+                letterSpacing = 1.4,
+                fontColor = { 94, 234, 212, 255 },
+                width = 150,
+                textAlign = "right",
+            },
         },
-        backgroundColor = { 22, 32, 48, 240 },
-        borderColor = { 100, 145, 180, 255 },
-        borderWidth = 1,
-        borderRadius = 5,
     }
 
-    local titleLabel = UI.Label {
-        id = "title",
-        position = "absolute",
-        left = 0,
-        width = "100%",
-        top = 10,
-        height = 32,
-        text = string.format("%s · %s", CONFIG.title, CONFIG.quality),
-        fontSize = 18,
-        fontColor = { 235, 242, 255, 255 },
-        textAlign = "center",
-        verticalAlign = "middle",
-        textStroke = { width = 2, color = { 8, 12, 20, 255 } },
+    renderViewport_ = UI.Panel {
+        id = "render-viewport",
+        flexGrow = 1,
+        flexBasis = 0,
+        minWidth = 120,
+        height = "100%",
+        backgroundColor = { 4, 10, 18, 255 },
+        overflow = "hidden",
+        pointerEvents = "none",
     }
 
-    local footerLabel = UI.Label {
-        id = "footer",
-        position = "absolute",
-        left = 0,
-        width = "100%",
-        bottom = 8,
-        height = 18,
-        text = "纯 Lua 5.4 · CPU-only · 无图形 API 参与计算",
-        fontSize = 10,
-        fontColor = { 138, 169, 202, 255 },
-        textAlign = "center",
-        verticalAlign = "middle",
-        textStroke = { width = 1, color = { 8, 12, 20, 255 } },
+    workspacePanel_ = UI.Panel {
+        id = "workspace",
+        flexGrow = 1,
+        flexBasis = 0,
+        minHeight = 120,
+        flexDirection = "row",
+        children = { renderViewport_ },
+    }
+
+    local footer = UI.Panel {
+        height = 48,
+        flexShrink = 0,
+        paddingHorizontal = 18,
+        paddingVertical = 7,
+        gap = 5,
+        backgroundColor = { 12, 22, 34, 255 },
+        borderTopWidth = 1,
+        borderTopColor = { 60, 79, 98, 160 },
+        children = {
+            UI.Panel {
+                height = 22,
+                flexDirection = "row",
+                alignItems = "center",
+                children = {
+                    statusLabel_,
+                    UI.Label {
+                        text = "Lua 5.4 · CPU-only",
+                        fontSize = 9,
+                        fontColor = { 112, 132, 153, 255 },
+                        width = 120,
+                        textAlign = "right",
+                    },
+                },
+            },
+            progressBar_,
+        },
     }
 
     uiRoot_ = UI.Panel {
         width = "100%",
         height = "100%",
         position = "relative",
+        backgroundColor = { 7, 13, 22, 255 },
         pointerEvents = "box-none",
-        children = {
-            titleLabel,
-            statusLabel_,
-            progressBar_,
-            footerLabel,
-        },
+        children = { header, workspacePanel_, footer },
     }
     UI.SetRoot(uiRoot_)
 end
@@ -680,8 +723,8 @@ local function printRenderStats(renderer)
         CONFIG.height,
         CONFIG.samplesPerPixel,
         CONFIG.maxDepth,
-        J6_SEED,
-        J6_EXPOSURE
+        CONFIG.seed,
+        CONFIG.exposure
     ))
     print(string.format(
         "[RayTracer][J6.0] primaryGlass=%d avgFresnel=%.6f reflectionEffective=%d transmissionEffective=%d guideEffective=%d guideCoverage=%.6f",
@@ -763,31 +806,42 @@ function Start()
             return buildRenderer(config)
         end,
     }
-    local inspectorPanel = InspectorUI.build(UI, {
+    inspectorPanel_ = InspectorUI.build(UI, {
         state = renderConfig_,
+        width = "32%",
         getPreset = function(name)
             return QualityPresets.get(name)
         end,
         onConfigChanged = function(config)
-            local previousWidth = CONFIG.width
-            local previousHeight = CONFIG.height
             setConfig(config)
             buildCamera(renderConfig_)
-            if previousWidth ~= CONFIG.width or previousHeight ~= CONFIG.height then
-                resetDisplayTexture()
+            if renderController_ ~= nil then
+                renderController_:configure(renderConfig_)
             end
-            layoutDisplayCanvas()
-            if statusLabel_ ~= nil then
-                statusLabel_:SetText(string.format(
-                    "待机 · %s · %dx%d · %d spp · %s/%d轮",
-                    CONFIG.quality,
-                    CONFIG.width,
-                    CONFIG.height,
-                    CONFIG.samplesPerPixel,
-                    CONFIG.denoiseKernel,
-                    CONFIG.denoiseIterations
+            renderer_ = nil
+            reportedComplete_ = false
+            displayFrame_ = nil
+            displayFramePass_ = 0
+            progressBar_:SetValue(0)
+            resetDisplayTexture()
+            if titleLabel_ ~= nil then
+                titleLabel_:SetText(string.format(
+                    "%s  /  %s",
+                    CONFIG.title,
+                    CONFIG.quality
                 ))
             end
+            statusLabel_:SetText(string.format(
+                "待机 · %dx%d · %d spp · depth %d · %s/%d",
+                CONFIG.width,
+                CONFIG.height,
+                CONFIG.samplesPerPixel,
+                CONFIG.maxDepth,
+                CONFIG.denoiseKernel,
+                CONFIG.denoiseIterations
+            ))
+            UI.MarkLayoutDirty()
+            layoutDisplayCanvas()
         end,
         onStart = function(status)
             if renderController_:start() then
@@ -813,7 +867,9 @@ function Start()
             status:SetText("已终止绘制")
         end,
     })
-    uiRoot_:AddChild(inspectorPanel)
+    workspacePanel_:AddChild(inspectorPanel_)
+    UI.MarkLayoutDirty()
+    layoutDisplayCanvas()
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent(vg_, "NanoVGRender", "HandleRender")
     SubscribeToEvent("ScreenMode", "HandleScreenMode")
