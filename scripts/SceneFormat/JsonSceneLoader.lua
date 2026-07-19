@@ -305,9 +305,18 @@ local function compile(resourcePath, document)
     }
 end
 
+function JsonSceneLoader.compileDocument(document, sourceName)
+    local path = sourceName or "<memory>"
+    requireTable(path, document, "root")
+    return compile(path, document)
+end
+
 function JsonSceneLoader.load(resourcePath)
     requireString(resourcePath, resourcePath, "resourcePath")
-    return compile(resourcePath, readDocument(resourcePath))
+    return JsonSceneLoader.compileDocument(
+        readDocument(resourcePath),
+        resourcePath
+    )
 end
 
 return JsonSceneLoader
